@@ -135,6 +135,10 @@ IOStatus EncryptedRandomAccessFile::InvalidateCache(size_t offset,
   return file_->InvalidateCache(offset + prefixLength_, length);
 }
 
+IOStatus EncryptedRandomAccessFile::GetFileSize(uint64_t* size) {
+  return file_->GetFileSize(size);
+}
+
 IOStatus EncryptedWritableFile::Append(const Slice& data,
                                        const IOOptions& options,
                                        IODebugContext* dbg) {
