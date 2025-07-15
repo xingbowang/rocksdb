@@ -118,8 +118,8 @@ class PointLockManagerBenchmark {
 
     if (FLAGS_is_per_key_point_lock_manager) {
       printf("use PerKeyPointLockManager\n");
-      locker_.reset(new PerKeyPointLockManager(
-          static_cast<PessimisticTransactionDB*>(db_), txndb_opt_));
+      // locker_.reset(new PerKeyPointLockManager(
+      //     static_cast<PessimisticTransactionDB*>(db_), txndb_opt_));
     } else {
       printf("use PointLockManager\n");
       locker_.reset(new PointLockManager(
