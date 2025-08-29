@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <mutex>
+#include <semaphore>
 
 #include "monitoring/perf_context_imp.h"
 #include "rocksdb/slice.h"
@@ -26,9 +27,8 @@ constexpr bool kDebugLog = false;
 // variable to allow waiter to wait for the key lock. It also contains other
 // metadata about the waiter such as transaction id, lock type etc.
 struct KeyLockWaiter {
-  KeyLockWaiter(std::shared_ptr<TransactionDBCondVar> c, TransactionID i,
-                bool ex)
-      : id(i), exclusive(ex), ready(false), cv(std::move(c)) {}
+  KeyLockWaiter(TransactionID i, bool ex)
+      : id(i), exclusive(ex), ready(false) {}
 
   // disable copy constructor and assignment operator, move and move
   // assignment
@@ -57,7 +57,10 @@ struct KeyLockWaiter {
     if (ready) {
       return Status::OK();
     }
-    return AfterWait(cv->Wait(mutex));
+    mutex->UnLock();
+    sem.acquire();
+    mutex->Lock();
+    return AfterWait(Status::OK());
   }
 
   // Wait until its turn to take the lock within timeout_us
@@ -65,17 +68,34 @@ struct KeyLockWaiter {
                  int64_t timeout_us) {
     // Mutex is already locked by caller
     // Check ready flag before wait
+    Status status = Status::OK();
+
     if (ready) {
-      return Status::OK();
+      return status;
     }
-    return AfterWait(cv->WaitFor(mutex, timeout_us));
+    mutex->UnLock();
+    if (timeout_us < 0) {
+      // If timeout is negative, do not use a timeout
+      sem.acquire();
+      status = AfterWait(Status::OK());
+    } else {
+      printf("try to acquire semaphore for %ld us, %p\n", timeout_us, &sem);
+      if (sem.try_acquire_for(std::chrono::microseconds(timeout_us))) {
+        status = AfterWait(Status::OK());
+      } else {
+        status = AfterWait(Status::TimedOut(Status::SubCode::kMutexTimeout));
+      }
+    }
+    mutex->Lock();
+    return status;
   }
 
   // Notify the waiter to take the lock
   void Notify() {
     // Mutex is already locked by caller
     ready = true;
-    cv->Notify();
+    sem.release();
+    printf("released semaphore %p\n", &sem);
   }
 
   TransactionID id;
@@ -101,7 +121,7 @@ struct KeyLockWaiter {
   // semaphore is likely more performant than mutex + cv.
   // Although we will also need to implement TransactionDBSemaphore, which would
   // be required if external system wants to do instrumented lock wait tracking
-  std::shared_ptr<TransactionDBCondVar> cv;
+  std::binary_semaphore sem{0};
 };
 
 struct LockInfo {
@@ -310,8 +330,7 @@ struct LockMapStripe {
     KeyLockWaiter* waiter = nullptr;
     if (key_lock_waiter_.Get() == nullptr) {
       // create key lock waiter
-      key_lock_waiter_.Reset(
-          new KeyLockWaiter(mutex_factory_->AllocateCondVar(), id, exclusive));
+      key_lock_waiter_.Reset(new KeyLockWaiter(id, exclusive));
       waiter = static_cast<KeyLockWaiter*>(key_lock_waiter_.Get());
     } else {
       waiter = static_cast<KeyLockWaiter*>(key_lock_waiter_.Get());
