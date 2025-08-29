@@ -11,6 +11,27 @@ import sys
 import tempfile
 import time
 
+
+def setup_random_seed_before_main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--random_seed",
+        default=0,
+        type=int,
+        help="Random seed used for reproduce the same test parameter set",
+    )
+    args, _ = parser.parse_known_args()
+    random_seed = (
+        random.randint(1, 2**64) if args.random_seed == 0 else args.random_seed
+    )
+    print(f"Start with random seed {random_seed}")
+    random.seed(random_seed)
+
+
+# Random seed has to be setup before the rest of the script, so that the random
+# value selected in the global variable uses the random seed specified
+setup_random_seed_before_main()
+
 # params overwrite priority:
 #   for default:
 #       default_params < {blackbox,whitebox}_default_params < args
@@ -80,6 +101,7 @@ default_params = {
     "destroy_db_initially": 0,
     "enable_pipelined_write": lambda: random.randint(0, 1),
     "enable_compaction_filter": lambda: random.choice([0, 0, 0, 1]),
+    "enable_compaction_on_deletion_trigger": lambda: random.choice([0, 0, 0, 1]),
     # `inplace_update_support` is incompatible with DB that has delete
     # range data in memtables.
     # Such data can result from any of the previous db stress runs
@@ -181,7 +203,6 @@ default_params = {
     "format_version": lambda: random.choice([2, 3, 4, 5, 6, 7, 7]),
     "index_block_restart_interval": lambda: random.choice(range(1, 16)),
     "use_multiget": lambda: random.randint(0, 1),
-    "use_multiscan": 0,
     "use_get_entity": lambda: random.choice([0] * 7 + [1]),
     "use_multi_get_entity": lambda: random.choice([0] * 7 + [1]),
     "periodic_compaction_seconds": lambda: random.choice([0, 0, 1, 2, 10, 100, 1000]),
@@ -360,6 +381,9 @@ default_params = {
         + ["randommixed"] * 2
         + ["custom"] * 3
     ),
+    # fixed within a run for easier debugging
+    # actual frequency is lower after option sanitization
+    "use_multiscan": random.choice([1] + [0] * 3),
 }
 
 _TEST_DIR_ENV_VAR = "TEST_TMPDIR"
@@ -758,7 +782,7 @@ def finalize_and_sanitize(src_params):
     if (
         dest_params.get("test_batches_snapshots") == 1
         or dest_params.get("use_txn") == 1
-        or dest_params.get("user_timestamp_size") > 0
+        or dest_params.get("user_timestamp_size", 0) > 0
     ):
         dest_params["ingest_external_file_one_in"] = 0
     if (
@@ -786,7 +810,7 @@ def finalize_and_sanitize(src_params):
     if (
         dest_params.get("sync_fault_injection") == 1
         or dest_params.get("disable_wal") == 1
-        or dest_params.get("manual_wal_flush_one_in") > 0
+        or dest_params.get("manual_wal_flush_one_in", 0) > 0
     ):
         # File ingestion does not guarantee prefix-recoverability when unsynced
         # data can be lost. Ingesting a file syncs data immediately that is
@@ -993,7 +1017,7 @@ def finalize_and_sanitize(src_params):
         dest_params["check_multiget_entity_consistency"] = 0
     if dest_params.get("disable_wal") == 0:
         if (
-            dest_params.get("reopen") > 0
+            dest_params.get("reopen", 0) > 0
             or (
                 dest_params.get("manual_wal_flush_one_in")
                 and dest_params.get("column_families") != 1
@@ -1062,7 +1086,7 @@ def finalize_and_sanitize(src_params):
     if dest_params.get("use_put_entity_one_in") == 1:
         dest_params["use_timed_put_one_in"] = 0
     elif (
-        dest_params.get("use_put_entity_one_in") > 1
+        dest_params.get("use_put_entity_one_in", 0) > 1
         and dest_params.get("use_timed_put_one_in") == 1
     ):
         dest_params["use_timed_put_one_in"] = 3
@@ -1103,6 +1127,14 @@ def finalize_and_sanitize(src_params):
     # Continuous verification fails with secondaries inside NonBatchedOpsStressTest
     if dest_params.get("test_secondary") == 1:
         dest_params["continuous_verification_interval"] = 0
+    if (
+        dest_params.get("prefix_size", 0) > 0
+        or dest_params.get("read_fault_one_in", 0) > 0
+    ):
+        dest_params["use_multiscan"] = 0
+    if dest_params.get("use_multiscan") == 1:
+        dest_params["fill_cache"] = 1
+        dest_params["async_io"] = 0
     return dest_params
 
 
@@ -1171,6 +1203,7 @@ def gen_cmd(params, unknown_params):
             not in {
                 "test_type",
                 "simple",
+                "random_seed",
                 "duration",
                 "interval",
                 "random_kill_odd",
