@@ -1190,20 +1190,21 @@ struct BlockBasedTableBuilder::Rep {
         SetStatus(
             Status::InvalidArgument("user_defined_index_factory not supported "
                                     "with parallel compression"));
-      } else if (ioptions.user_comparator != BytewiseComparator()) {
-        // TODO: Pass the user_comparator to the UDI and let it validate. Do
-        // it in a major release.
-        SetStatus(
-            Status::InvalidArgument("user_defined_index_factory only supported "
-                                    "with bytewise comparator"));
       } else {
-        std::unique_ptr<UserDefinedIndexBuilder> user_defined_index_builder(
-            table_options.user_defined_index_factory->NewBuilder());
-        if (user_defined_index_builder != nullptr) {
-          index_builder = std::make_unique<UserDefinedIndexBuilderWrapper>(
-              std::string(table_options.user_defined_index_factory->Name()),
-              std::move(index_builder), std::move(user_defined_index_builder),
-              &internal_comparator, ts_sz, persist_user_defined_timestamps);
+        std::unique_ptr<UserDefinedIndexBuilder> user_defined_index_builder;
+        UserDefinedIndexOption udi_options;
+        udi_options.comparator = internal_comparator.user_comparator();
+        auto s = table_options.user_defined_index_factory->NewBuilder(
+            user_defined_index_builder, udi_options);
+        if (!s.ok()) {
+          SetStatus(s);
+        } else {
+          if (user_defined_index_builder != nullptr) {
+            index_builder = std::make_unique<UserDefinedIndexBuilderWrapper>(
+                std::string(table_options.user_defined_index_factory->Name()),
+                std::move(index_builder), std::move(user_defined_index_builder),
+                &internal_comparator, ts_sz, persist_user_defined_timestamps);
+          }
         }
       }
     }
