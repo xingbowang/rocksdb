@@ -438,6 +438,15 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     const std::shared_ptr<FileSystem> fs;
     const MultiScanArgs* scan_opts;
     std::vector<CachableEntry<Block>> pinned_data_blocks;
+    // The separator of each data block in above pinned_data_blocks vector.
+    // Its size is same as pinned_data_blocks.
+    // The value of separator is less than the first key in the corresponding
+    // data block.
+    std::vector<std::string> data_block_separators;
+    // Track previously seeked key in multi-scan.
+    // This is used to ensure that the seek key is keep moving forward, as
+    // blocks that are smaller than the seek key are unpinned from memory.
+    std::string prev_seek_key_;
 
     // Indicies into pinned_data_blocks for data blocks for each scan range.
     // inclusive start, exclusive end
@@ -464,12 +473,14 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     MultiScanState(
         const std::shared_ptr<FileSystem>& _fs, const MultiScanArgs* _scan_opts,
         std::vector<CachableEntry<Block>>&& _pinned_data_blocks,
+        std::vector<std::string>&& _data_block_separators,
         std::vector<std::tuple<size_t, size_t>>&& _block_index_ranges_per_scan,
         UnorderedMap<size_t, size_t>&& _block_idx_to_readreq_idx,
         std::vector<AsyncReadState>&& _async_states, size_t _prefetch_max_idx)
         : fs(_fs),
           scan_opts(_scan_opts),
           pinned_data_blocks(std::move(_pinned_data_blocks)),
+          data_block_separators(std::move(_data_block_separators)),
           block_index_ranges_per_scan(std::move(_block_index_ranges_per_scan)),
           next_scan_idx(0),
           cur_data_block_idx(0),
@@ -607,6 +618,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
 
   // Unpins blocks from the immediately previous scan range.
   void UnpinPreviousScanBlocks(size_t current_scan_idx);
+  void UnpinPreparedBlocks(size_t start_prepared_block_idx,
+                           size_t end_prepared_block_idx);
 
   void PrepareReadAsyncCallBack(FSReadRequest& req, void* cb_arg) {
     // Record status, result and sanity check offset from `req`.
@@ -627,6 +640,10 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
       assert(async_state->status.IsAborted());
     }
   }
+
+  void MultiScanSeekTargetFromBlock(const Slice* seek_target, size_t block_idx);
+  void MultiScanUnexpectedSeekTarget(const Slice* seek_target,
+                                     size_t block_idx);
 
   Status MultiScanLoadDataBlock(size_t idx) {
     if (idx >= multi_scan_->prefetch_max_idx) {
@@ -671,7 +688,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   Status CollectBlockHandles(
       const std::vector<ScanOptions>& scan_opts, bool require_file_overlap,
       std::vector<BlockHandle>* scan_block_handles,
-      std::vector<std::tuple<size_t, size_t>>* block_index_ranges_per_scan);
+      std::vector<std::tuple<size_t, size_t>>* block_index_ranges_per_scan,
+      std::vector<std::string>* data_block_boundary_keys);
 
   Status FilterAndPinCachedBlocks(
       const std::vector<BlockHandle>& scan_block_handles,

@@ -996,11 +996,12 @@ void BlockBasedTableIterator::Prepare(const MultiScanArgs* multiscan_opts) {
   index_iter_->Prepare(multiscan_opts);
 
   std::vector<BlockHandle> scan_block_handles;
+  std::vector<std::string> data_block_separators;
   std::vector<std::tuple<size_t, size_t>> block_index_ranges_per_scan;
   const std::vector<ScanOptions>& scan_opts = multiscan_opts->GetScanRanges();
-  multi_scan_status_ =
-      CollectBlockHandles(scan_opts, multiscan_opts->RequireFileOverlap(),
-                          &scan_block_handles, &block_index_ranges_per_scan);
+  multi_scan_status_ = CollectBlockHandles(
+      scan_opts, multiscan_opts->RequireFileOverlap(), &scan_block_handles,
+      &block_index_ranges_per_scan, &data_block_separators);
   if (!multi_scan_status_.ok()) {
     return;
   }
@@ -1039,7 +1040,7 @@ void BlockBasedTableIterator::Prepare(const MultiScanArgs* multiscan_opts) {
   // blocks.
   multi_scan_ = std::make_unique<MultiScanState>(
       table_->get_rep()->ioptions.env->GetFileSystem(), multiscan_opts,
-      std::move(pinned_data_blocks_guard),
+      std::move(pinned_data_blocks_guard), std::move(data_block_separators),
       std::move(block_index_ranges_per_scan),
       std::move(block_idx_to_readreq_idx), std::move(async_states),
       prefetched_max_idx);
@@ -1048,25 +1049,91 @@ void BlockBasedTableIterator::Prepare(const MultiScanArgs* multiscan_opts) {
   block_iter_points_to_real_block_ = false;
 }
 
-void BlockBasedTableIterator::SeekMultiScan(const Slice* target) {
+void BlockBasedTableIterator::SeekMultiScan(const Slice* seek_target) {
   assert(multi_scan_ && multi_scan_status_.ok());
   // This is a MultiScan and Preapre() has been called.
-  //
+
   // Validate seek key with scan options
-  if (multi_scan_->next_scan_idx >= multi_scan_->scan_opts->size()) {
-    multi_scan_status_ = Status::InvalidArgument("Outside MultiScan range");
-  } else if (!target) {
+  if (!seek_target) {
     // start key must be set for multi-scan
     multi_scan_status_ = Status::InvalidArgument("No seek key for MultiScan");
-  } else if (user_comparator_.CompareWithoutTimestamp(
-                 ExtractUserKey(*target), /*a_has_ts=*/true,
-                 multi_scan_->scan_opts
-                     ->GetScanRanges()[multi_scan_->next_scan_idx]
-                     .range.start.value(),
-                 /*b_has_ts=*/false) != 0) {
-    // Unexpected seek key
-    multi_scan_status_ = Status::InvalidArgument("Unexpected seek key");
+    return;
+  }
+
+  // Check the case where there is no range prepared on this table
+  if (multi_scan_->scan_opts->size() == 0) {
+    // Simply return out of bound.
+    is_out_of_bound_ = true;
+    assert(!Valid());
+    return;
+  }
+
+  // Check whether seek key is moving forward.
+  if (!multi_scan_->prev_seek_key_.empty()) {
+    if (user_comparator_.CompareWithoutTimestamp(ExtractUserKey(*seek_target),
+                                                 /*a_has_ts=*/true,
+                                                 multi_scan_->prev_seek_key_,
+                                                 /*b_has_ts=*/false) < 0) {
+      // The seek target moved backward
+      multi_scan_status_ =
+          Status::InvalidArgument("Unexpected seek key moving backward");
+      return;
+    }
+  }
+  multi_scan_->prev_seek_key_ = ExtractUserKey(*seek_target).ToString();
+
+  // There are still a few cases we need to handle
+  // table: _____[prepared range 1]_____[prepared range 2]_____
+  // seek :   1  2        3          4                      5
+  // Case 1: seek before all of the prepared ranges, return out of bound
+  // Case 2: seek at the beginning of a prepared range (expected case)
+  // Case 3: seek within a prepared range (unexpected, but supported)
+  // Case 4: seek between 2 of the prepared ranges, return out of bound
+  // Case 5: seek after all of the prepared ranges, should move on to next file
+
+  auto compare_next_scan_start_result =
+      user_comparator_.CompareWithoutTimestamp(
+          ExtractUserKey(*seek_target), /*a_has_ts=*/true,
+          multi_scan_->scan_opts->GetScanRanges()[multi_scan_->next_scan_idx]
+              .range.start.value(),
+          /*b_has_ts=*/false);
+
+  if (compare_next_scan_start_result != 0) {
+    // The seek key is not exactly same as what was prepared.
+    if (compare_next_scan_start_result < 0) {
+      // Needs to handle Cases: 1, 3, 4
+      //
+      // next_scan_idx :                    |
+      //                                    V
+      // table: _____[prepared range 1]_____[prepared range 2]_____
+      // seek :   1           3          4
+
+      // Case 1: Seek key is before the start key of the first range
+      if (multi_scan_->next_scan_idx == 0) {
+        // Simply return out of bound.
+        is_out_of_bound_ = true;
+        assert(!Valid());
+        return;
+      }
+      // Case: 3, 4
+      MultiScanUnexpectedSeekTarget(
+          seek_target, std::get<0>(multi_scan_->block_index_ranges_per_scan
+                                       [multi_scan_->next_scan_idx - 1]));
+
+    } else {
+      // Needs to handle Cases: 3, 4, 5
+      // next_scan_idx :|
+      //                V
+      // table:     ____[prepared range 1]_____[prepared range 2]_____
+      // seek :                 3           4                      5
+      MultiScanUnexpectedSeekTarget(
+          seek_target,
+          std::get<0>(
+              multi_scan_
+                  ->block_index_ranges_per_scan[multi_scan_->next_scan_idx]));
+    }
   } else {
+    // unpin block, then do a seek.
     if (multi_scan_->next_scan_idx > 0) {
       UnpinPreviousScanBlocks(multi_scan_->next_scan_idx);
     }
@@ -1083,28 +1150,87 @@ void BlockBasedTableIterator::SeekMultiScan(const Slice* target) {
       is_out_of_bound_ = false;
     }
 
-    if (!block_iter_points_to_real_block_ ||
-        multi_scan_->cur_data_block_idx != cur_scan_start_idx) {
-      if (block_iter_points_to_real_block_) {
-        // Should be scan in increasing key range.
-        // All blocks before cur_data_block_idx_ are not pinned anymore.
-        assert(multi_scan_->cur_data_block_idx < cur_scan_start_idx);
-      }
+    MultiScanSeekTargetFromBlock(seek_target, cur_scan_start_idx);
+  }
+}
 
-      ResetDataIter();
-
-      multi_scan_->cur_data_block_idx = cur_scan_start_idx;
-      multi_scan_status_ = MultiScanLoadDataBlock(cur_scan_start_idx);
-      if (!multi_scan_status_.ok()) {
-        assert(!Valid());
-        assert(status() == multi_scan_status_);
-        return;
+void BlockBasedTableIterator::MultiScanUnexpectedSeekTarget(
+    const Slice* seek_target, size_t block_idx) {
+  // Assert that the target seek key is larger than or equal to the
+  // separator of the first block of next prepared range. The separator is
+  // from the index, which is smaller than the first key in the block.
+  assert(user_comparator_.CompareWithoutTimestamp(
+             ExtractUserKey(*seek_target), /*a_has_ts=*/true,
+             multi_scan_->data_block_separators[block_idx],
+             /*b_has_ts=*/false) > 0);
+  // linear search the block that contains the seek target, and unpin blocks
+  // that are before it.
+  auto const& data_block_separators = multi_scan_->data_block_separators;
+  while (block_idx < data_block_separators.size() &&
+         (user_comparator_.CompareWithoutTimestamp(
+              ExtractUserKey(*seek_target), /*a_has_ts=*/true,
+              data_block_separators[block_idx],
+              /*b_has_ts=*/false) < 0)) {
+    if (block_idx > 0) {
+      if (!multi_scan_->pinned_data_blocks[block_idx - 1].IsEmpty()) {
+        multi_scan_->pinned_data_blocks[block_idx - 1].Reset();
       }
     }
-    multi_scan_->cur_data_block_idx = cur_scan_start_idx;
-    block_iter_points_to_real_block_ = true;
-    block_iter_.Seek(*target);
-    FindKeyForward();
+    block_idx++;
+  }
+  if (block_idx > 0) {
+    block_idx--;
+  }
+
+  // advance to the right prepared range
+  while (multi_scan_->next_scan_idx <
+         multi_scan_->block_index_ranges_per_scan.size()) {
+    auto cur_scan_end_idx = std::get<1>(
+        multi_scan_->block_index_ranges_per_scan[multi_scan_->next_scan_idx]);
+    if (cur_scan_end_idx >= block_idx) {
+      break;
+    }
+    multi_scan_->next_scan_idx++;
+  }
+  multi_scan_->next_scan_idx++;
+
+  // The current block may contain the data for the target key
+  MultiScanSeekTargetFromBlock(seek_target, block_idx);
+}
+
+void BlockBasedTableIterator::MultiScanSeekTargetFromBlock(
+    const Slice* seek_target, size_t block_idx) {
+  if (!block_iter_points_to_real_block_ ||
+      multi_scan_->cur_data_block_idx != block_idx) {
+    if (block_iter_points_to_real_block_) {
+      // Should be scan in increasing key range.
+      // All blocks before cur_data_block_idx_ are not pinned anymore.
+      assert(multi_scan_->cur_data_block_idx < block_idx);
+    }
+
+    ResetDataIter();
+
+    multi_scan_->cur_data_block_idx = block_idx;
+    multi_scan_status_ = MultiScanLoadDataBlock(block_idx);
+    if (!multi_scan_status_.ok()) {
+      assert(!Valid());
+      assert(status() == multi_scan_status_);
+      return;
+    }
+  }
+  multi_scan_->cur_data_block_idx = block_idx;
+  block_iter_points_to_real_block_ = true;
+  block_iter_.Seek(*seek_target);
+  FindKeyForward();
+}
+
+void BlockBasedTableIterator::UnpinPreparedBlocks(
+    size_t start_prepared_block_idx, size_t end_prepared_block_idx) {
+  for (size_t block_idx = start_prepared_block_idx;
+       block_idx < end_prepared_block_idx; ++block_idx) {
+    if (!multi_scan_->pinned_data_blocks[block_idx].IsEmpty()) {
+      multi_scan_->pinned_data_blocks[block_idx].Reset();
+    }
   }
 }
 
@@ -1115,19 +1241,14 @@ void BlockBasedTableIterator::UnpinPreviousScanBlocks(size_t current_scan_idx) {
   assert(current_scan_idx < multi_scan_->block_index_ranges_per_scan.size());
   if (current_scan_idx == 0) return;
 
-  auto [prev_start_block_idx, prev_end_block_idx] =
-      multi_scan_->block_index_ranges_per_scan[current_scan_idx - 1];
+  auto prev_start_block_idx = std::get<0>(
+      multi_scan_->block_index_ranges_per_scan[current_scan_idx - 1]);
   // Since a block can be shared between consecutive scans, we need
   // curr_start_block_idx here instead of just release blocks
-  // up to prev_end_block_idx.
-  auto [curr_start_block_idx, curr_end_block_idx] =
-      multi_scan_->block_index_ranges_per_scan[current_scan_idx];
-  for (size_t block_idx = prev_start_block_idx;
-       block_idx < curr_start_block_idx; ++block_idx) {
-    if (!multi_scan_->pinned_data_blocks[block_idx].IsEmpty()) {
-      multi_scan_->pinned_data_blocks[block_idx].Reset();
-    }
-  }
+  // up to the end of previous range block index.
+  auto curr_start_block_idx =
+      std::get<0>(multi_scan_->block_index_ranges_per_scan[current_scan_idx]);
+  UnpinPreparedBlocks(prev_start_block_idx, curr_start_block_idx);
 }
 
 void BlockBasedTableIterator::FindBlockForwardInMultiScan() {
@@ -1328,7 +1449,8 @@ Status BlockBasedTableIterator::ValidateScanOptions(
 Status BlockBasedTableIterator::CollectBlockHandles(
     const std::vector<ScanOptions>& scan_opts, bool require_file_overlap,
     std::vector<BlockHandle>* scan_block_handles,
-    std::vector<std::tuple<size_t, size_t>>* block_index_ranges_per_scan) {
+    std::vector<std::tuple<size_t, size_t>>* block_index_ranges_per_scan,
+    std::vector<std::string>* data_block_separators) {
   for (const auto& scan_opt : scan_opts) {
     size_t num_blocks = 0;
     bool check_overlap = !scan_block_handles->empty();
@@ -1357,6 +1479,9 @@ Status BlockBasedTableIterator::CollectBlockHandles(
         // Skip the current block since it's already in the list
       } else {
         scan_block_handles->push_back(index_iter_->value().handle);
+        // clone the Slice to avoid the lifetime issue
+
+        data_block_separators->push_back(index_iter_->user_key().ToString());
       }
       ++num_blocks;
       index_iter_->Next();
@@ -1374,6 +1499,7 @@ Status BlockBasedTableIterator::CollectBlockHandles(
         // Skip adding the current block since it's already in the list
       } else {
         scan_block_handles->push_back(index_iter_->value().handle);
+        data_block_separators->push_back(index_iter_->user_key().ToString());
       }
       ++num_blocks;
     } else if (num_blocks == 0 && index_iter_->UpperBoundCheckResult() !=
