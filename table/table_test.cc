@@ -87,6 +87,7 @@ namespace ROCKSDB_NAMESPACE {
 namespace {
 
 const std::string kDummyValue(10000, 'o');
+constexpr auto kVerbose = true;
 
 // DummyPropertiesCollector used to test BlockBasedTableProperties
 class DummyPropertiesCollector : public TablePropertiesCollector {
@@ -934,7 +935,6 @@ class HarnessTest : public testing::Test {
 
   void TestRandomAccess(Random* rnd, const std::vector<std::string>& keys,
                         const stl_wrappers::KVMap& data) {
-    static const bool kVerbose = false;
     InternalIterator* iter = constructor_->NewIterator();
     ASSERT_TRUE(!iter->Valid());
     stl_wrappers::KVMap::const_iterator model_iter = data.begin();
@@ -7836,7 +7836,6 @@ class UserDefinedIndexTestBase : public BlockBasedTableTestBase {
     read_opts.iterate_upper_bound = &ub;
     std::unique_ptr<Iterator> iter(db->NewIterator(read_opts, cfh));
     iter->Prepare(scan_opts);
-    static const bool kVerbose = false;
     for (auto opt : opts) {
       ub = opt.range.limit.value();
       iter->Seek(opt.range.start.value());
@@ -8988,8 +8987,6 @@ std::ostream& operator<<(std::ostream& os,
             << param.enable_compaction_with_sst_partitioner << "}";
 }
 
-constexpr auto kVerbose = false;
-
 struct DataRange {
   size_t start;  // inclusive
   size_t end;    // exclusive
@@ -9016,10 +9013,11 @@ class UserDefinedIndexStressTest
           UserDefinedIndexStressTestParam::UserDefinedIndexStressTestTuple> {
  public:
   void SetUp() override {
-    rand_seed_ = static_cast<uint32_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
+    rand_seed_ = 2898617780;
+    // static_cast<uint32_t>(
+    // std::chrono::duration_cast<std::chrono::nanoseconds>(
+    // std::chrono::system_clock::now().time_since_epoch())
+    // .count());
 
     std::cout << "Random seed: " << rand_seed_ << std::endl;
 
@@ -9148,11 +9146,15 @@ class UserDefinedIndexStressTest
 
     data_added = false;
 
+    std::vector<DataRange> ranges_in_file;
+
     for (auto const& range : ranges) {
       assert(range.start != range.end);
       if (range.skipped) {
         continue;
       }
+
+      ranges_in_file.push_back(range);
 
       data_added = true;
 
@@ -9165,6 +9167,13 @@ class UserDefinedIndexStressTest
           ASSERT_OK(writer->Put(key, range.value));
         }
       }
+    }
+    if (kVerbose) {
+      std::cout << "Ingested file: " + ingest_file + "; Range: {";
+      for (const auto& range : ranges_in_file) {
+        std::cout << "[" << range.ToString() << "], ";
+      }
+      std::cout << "}" << std::endl;
     }
     if (data_added) {
       ASSERT_OK(writer->Finish());
@@ -9395,7 +9404,7 @@ TEST_P(UserDefinedIndexStressTest, DISABLED_PartialDeleteRange) {
   ASSERT_NO_FATAL_FAILURE(ValidateQueryResult());
 }
 
-TEST_P(UserDefinedIndexStressTest, DISABLED_DeleteRangeMixedWithDataFile) {
+TEST_P(UserDefinedIndexStressTest, DeleteRangeMixedWithDataFile) {
   // Create 2 column families. One use normal put/del, the other uses sst
   // ingest.
   // Test the case where there are 3 levels, the middle level is a delete
