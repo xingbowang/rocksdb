@@ -9140,23 +9140,35 @@ class UserDefinedIndexStressTest
   }
 
   void CreateSstFileWithRanges(const std::string& ingest_file,
-                               const DataRange& range) {
+                               const std::vector<DataRange>& ranges,
+                               bool& data_added) {
     std::unique_ptr<SstFileWriter> writer =
         std::make_unique<SstFileWriter>(EnvOptions(), options_);
     ASSERT_OK(writer->Open(ingest_file));
 
-    assert(range.start != range.end);
+    data_added = false;
 
-    if (range.is_range_delete) {
-      ASSERT_OK(writer->DeleteRange(range.start_key, range.end_key));
-    } else {
-      for (size_t i = range.start; i != range.end;) {
-        auto key = FormatKey(i);
-        range.start < range.end ? i++ : i--;
-        ASSERT_OK(writer->Put(key, range.value));
+    for (auto const& range : ranges) {
+      assert(range.start != range.end);
+      if (range.skipped) {
+        continue;
+      }
+
+      data_added = true;
+
+      if (range.is_range_delete) {
+        ASSERT_OK(writer->DeleteRange(range.start_key, range.end_key));
+      } else {
+        for (size_t i = range.start; i != range.end;) {
+          auto key = FormatKey(i);
+          range.start < range.end ? i++ : i--;
+          ASSERT_OK(writer->Put(key, range.value));
+        }
       }
     }
-    ASSERT_OK(writer->Finish()) << range.ToString();
+    if (data_added) {
+      ASSERT_OK(writer->Finish());
+    }
   }
 
   void RangeScan(std::unique_ptr<Iterator>& iter,
@@ -9276,17 +9288,42 @@ class UserDefinedIndexStressTest
   void IngestFilesInOneLevel(const std::vector<DataRange>& ranges_in_level,
                              const std::string& ingest_file_name_prefix,
                              size_t& ingest_file_count,
-                             const IngestExternalFileOptions& ifo) {
+                             const IngestExternalFileOptions& ifo,
+                             bool combine_ranges = false) {
     std::vector<std::string> ingest_files;
     // Generate SST file and bulk load them one level at a time
-    for (auto const& range : ranges_in_level) {
-      if (!range.skipped) {
+    if (combine_ranges) {
+      size_t i = 0;
+      while (i < ranges_in_level.size()) {
+        // if combine ranges, generate 1 SST file that combines muliple ranges
+        // together
+        size_t batch_end_idx =
+            std::min(i + rnd.Uniform(3) + 2, ranges_in_level.size());
+        bool data_added = false;
         ASSERT_NO_FATAL_FAILURE(CreateSstFileWithRanges(
             ingest_file_name_prefix + std::to_string(ingest_file_count),
-            range));
-        ingest_files.push_back(ingest_file_name_prefix +
-                               std::to_string(ingest_file_count));
-        ingest_file_count++;
+            {ranges_in_level.begin() + i,
+             ranges_in_level.begin() + batch_end_idx},
+            data_added));
+        if (data_added) {
+          ingest_files.push_back(ingest_file_name_prefix +
+                                 std::to_string(ingest_file_count));
+          ingest_file_count++;
+        }
+        i = batch_end_idx;
+      }
+    } else {
+      for (auto const& range : ranges_in_level) {
+        if (!range.skipped) {
+          bool data_added = false;
+          ASSERT_NO_FATAL_FAILURE(CreateSstFileWithRanges(
+              ingest_file_name_prefix + std::to_string(ingest_file_count),
+              {range}, data_added));
+          ASSERT_TRUE(data_added);
+          ingest_files.push_back(ingest_file_name_prefix +
+                                 std::to_string(ingest_file_count));
+          ingest_file_count++;
+        }
       }
     }
 
@@ -9323,9 +9360,9 @@ class UserDefinedIndexStressTest
 // Becuase query count == 2, level n+1 would only prepare 3-5. but since 4-6
 // got deleted in the upper level, they are not returned, so only 3 is
 // returned. Meantime the query should have return [3, 6]
-// One way to fix this is by preparing more data blocks once prepared blocks are
-// exhausted, but upper bound is not reached yet.
-// This requires following changes:
+// One way to fix this is by preparing more data blocks once prepared blocks
+// are exhausted, but upper bound is not reached yet. This requires following
+// changes:
 // 1. Fix out of bound flag in block table iterator. Only set it if the key is
 // larger than the upper bound.
 // 2. Refactor the prepared block single dimension vector into 2 dimension of
@@ -9358,12 +9395,71 @@ TEST_P(UserDefinedIndexStressTest, DISABLED_PartialDeleteRange) {
   ASSERT_NO_FATAL_FAILURE(ValidateQueryResult());
 }
 
+TEST_P(UserDefinedIndexStressTest, DISABLED_DeleteRangeMixedWithDataFile) {
+  // Create 2 column families. One use normal put/del, the other uses sst
+  // ingest.
+  // Test the case where there are 3 levels, the middle level is a delete
+  // range file that span across the entire key space. The top level file have
+  // multiple files and each one has both data and delete range Scan same
+  // range between the 2 CF and validate the result is same
+  SCOPED_TRACE("Start with random seed: " + std::to_string(rand_seed_));
+  dbname_ = test::PerThreadDBPath(
+      "UserDefinedIndexStressTest_DeleteRangeMixedWithDataFile");
+  SCOPED_TRACE("dbname: " + dbname_);
+  ASSERT_NO_FATAL_FAILURE(SetupDB(dbname_));
+
+  // Test 3 levels.
+  // bottom level is normal data files.
+  ranges_in_levels_.push_back(GenerateKeyRanges(rnd.Uniform(3) + 4, 2, "L6"));
+  // middle level delete range between each level
+  if (is_reverse_comparator_) {
+    ranges_in_levels_.push_back({{.start = 100,
+                                  .end = 0,
+                                  .is_range_delete = true,
+                                  .skipped = false,
+                                  .start_key = "keyz",
+                                  .end_key = "key"}});
+  } else {
+    ranges_in_levels_.push_back({{.start = 0,
+                                  .end = 100,
+                                  .is_range_delete = true,
+                                  .skipped = false,
+                                  .start_key = "key",
+                                  .end_key = "keyz"}});
+  }
+
+  // Top level is normal data files
+  ranges_in_levels_.push_back(GenerateKeyRanges(rnd.Uniform(3) + 4, 2, "L4"));
+
+  IngestExternalFileOptions ifo;
+  ifo.snapshot_consistency = false;
+  auto ingest_file_name_prefix = dbname_ + "ingest_file_";
+  size_t ingest_file_count = 0;
+  auto first_level = true;
+  for (auto const& ranges_in_level : ranges_in_levels_) {
+    ASSERT_NO_FATAL_FAILURE(
+        IngestFilesInOneLevel(ranges_in_level, ingest_file_name_prefix,
+                              ingest_file_count, ifo, true));
+    if (first_level) {
+      first_level = false;
+      if (enable_compaction_with_sst_partitioner_) {
+        // When compaction is enabled, do a compaction at the first level
+        ASSERT_NO_FATAL_FAILURE(CompactIngestedCF());
+      }
+    }
+  }
+
+  ASSERT_NO_FATAL_FAILURE(AddDataToRegularCF());
+
+  ASSERT_NO_FATAL_FAILURE(ValidateQueryResult());
+}
+
 TEST_P(UserDefinedIndexStressTest, DeleteRange) {
   // Create 2 column families. One use normal put/del, the other uses sst
   // ingest.
-  // Test the case where there are 3 levels, the middle level is a delete range
-  // file that span across the entire key space.
-  // Range scan same range between the 2 CF and validate the result is same
+  // Test the case where there are 3 levels, the middle level is a delete
+  // range file that span across the entire key space. Range scan same range
+  // between the 2 CF and validate the result is same
   SCOPED_TRACE("Start with random seed: " + std::to_string(rand_seed_));
   dbname_ = test::PerThreadDBPath("UserDefinedIndexStressTest_DeleteRange");
   SCOPED_TRACE("dbname: " + dbname_);
