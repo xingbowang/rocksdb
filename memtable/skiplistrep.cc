@@ -4,6 +4,7 @@
 //  (found in the LICENSE.Apache file in the root directory).
 //
 #include <random>
+#include <vector>
 
 #include "db/memtable.h"
 #include "memory/arena.h"
@@ -70,6 +71,17 @@ class SkipListRep : public MemTableRep {
 
   bool InsertKeyConcurrently(KeyHandle handle) override {
     return skip_list_.InsertConcurrently(static_cast<char*>(handle));
+  }
+
+  // Batch insert multiple keys at once with prefetching optimization.
+  // Returns the number of keys successfully inserted.
+  size_t InsertBatch(KeyHandle* handles, size_t batch_size) override {
+    // Convert KeyHandle* to const char** for skiplist
+    std::vector<const char*> keys(batch_size);
+    for (size_t i = 0; i < batch_size; ++i) {
+      keys[i] = static_cast<char*>(handles[i]);
+    }
+    return skip_list_.InsertBatch(keys.data(), batch_size);
   }
 
   // Returns true iff an entry that compares equal to key is in the list.
