@@ -2091,7 +2091,8 @@ class MemTableInserter : public WriteBatch::Handler {
                    bool concurrent_memtable_writes,
                    const WriteBatch::ProtectionInfo* prot_info,
                    bool* has_valid_writes = nullptr, bool seq_per_batch = false,
-                   bool batch_per_txn = true, bool hint_per_batch = false)
+                   bool batch_per_txn = true, bool hint_per_batch = false,
+                   bool /* use_batch_add */ = false)
       : sequence_(_sequence),
         cf_mems_(cf_mems),
         flush_scheduler_(flush_scheduler),
@@ -3245,7 +3246,7 @@ Status WriteBatchInternal::InsertInto(
     TrimHistoryScheduler* trim_history_scheduler,
     bool ignore_missing_column_families, uint64_t log_number, DB* db,
     bool concurrent_memtable_writes, bool seq_per_batch, size_t batch_cnt,
-    bool batch_per_txn, bool hint_per_batch) {
+    bool batch_per_txn, bool hint_per_batch, bool use_batch_add) {
 #ifdef NDEBUG
   (void)batch_cnt;
 #endif
@@ -3255,7 +3256,7 @@ Status WriteBatchInternal::InsertInto(
                             ignore_missing_column_families, log_number, db,
                             concurrent_memtable_writes, nullptr /* prot_info */,
                             nullptr /*has_valid_writes*/, seq_per_batch,
-                            batch_per_txn, hint_per_batch);
+                            batch_per_txn, hint_per_batch, use_batch_add);
   SetSequence(writer->batch, sequence);
   inserter.set_log_number_ref(writer->log_ref);
   inserter.set_prot_info(writer->batch->prot_info_.get());

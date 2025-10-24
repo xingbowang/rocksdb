@@ -2302,6 +2302,14 @@ struct WriteOptions {
   // Default: Env::IOActivity::kUnknown.
   Env::IOActivity io_activity = Env::IOActivity::kUnknown;
 
+  // If true, use the optimized MemTable::BatchAdd API instead of individual
+  // Add calls. This can improve write performance by reducing function call
+  // overhead and improving cache locality when inserting a WriteBatch into
+  // memtables.
+  //
+  // Default: false
+  bool use_batch_add = false;
+
   WriteOptions() {}
   explicit WriteOptions(Env::IOActivity _io_activity);
   explicit WriteOptions(
