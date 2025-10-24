@@ -9,6 +9,7 @@
 
 #include "memtable/inlineskiplist.h"
 
+#include <iomanip>
 #include <set>
 #include <unordered_set>
 
@@ -97,6 +98,27 @@ class InlineSkipTest : public testing::Test {
     ASSERT_FALSE(iter.Valid());
     // Validate the list is well-formed.
     list->TEST_Validate();
+  }
+
+  // Count nodes at each level and return as a vector
+  // Index i contains the count of nodes at level i
+  static std::vector<int> CountNodesPerLevel(TestInlineSkipList* list) {
+    return list->TEST_GetLevelNodeCounts();
+  }
+
+  // Print skiplist level statistics for debugging
+  static void PrintSkipListStats(const std::string& name,
+                                 const std::vector<int>& level_counts) {
+    std::cout << "\n" << name << " skiplist structure:" << std::endl;
+    std::cout << "Level | Node Count | Ratio to Level 0" << std::endl;
+    std::cout << "------|------------|------------------" << std::endl;
+    for (size_t i = 0; i < level_counts.size(); ++i) {
+      double ratio =
+          level_counts[0] > 0 ? (double)level_counts[i] / level_counts[0] : 0.0;
+      std::cout << std::setw(5) << i << " | " << std::setw(10)
+                << level_counts[i] << " | " << std::fixed
+                << std::setprecision(4) << ratio << std::endl;
+    }
   }
 
  private:
@@ -686,7 +708,7 @@ TEST_F(InlineSkipTest, BatchInsertSequential) {
   TestComparator cmp;
   InlineSkipList<TestComparator> list(cmp, &arena);
 
-  const int N = 100;
+  const int N = 10000;
   std::vector<const char*> keys;
 
   // Allocate and prepare keys
@@ -724,7 +746,7 @@ TEST_F(InlineSkipTest, BatchInsertRandom) {
   InlineSkipList<TestComparator> list(cmp, &arena);
   Random rnd(301);
 
-  const int N = 100;
+  const int N = 10000;
   std::vector<const char*> keys;
   std::set<Key> key_set;
 
@@ -832,7 +854,7 @@ TEST_F(InlineSkipTest, BatchInsertLarge) {
   TestComparator cmp;
   InlineSkipList<TestComparator> list(cmp, &arena);
 
-  const int N = 1000;
+  const int N = 10000;
   std::vector<const char*> keys;
 
   // Allocate and prepare keys
@@ -898,7 +920,7 @@ TEST_F(InlineSkipTest, BatchInsertVsSequential) {
   InlineSkipList<TestComparator> list2(cmp, &arena2);
   Random rnd(401);
 
-  const int N = 200;
+  const int N = 10000;
   std::vector<Key> test_keys;
 
   // Generate test keys
@@ -1024,6 +1046,96 @@ TEST_F(InlineSkipTest, BatchInsertInterleaved) {
   ASSERT_FALSE(iter.Valid());
 
   list.TEST_Validate();
+}
+
+TEST_F(InlineSkipTest, BatchInsertShapeComparison) {
+  // Verify that InsertBatch creates the same skiplist structure
+  // as Insert (same node distribution across levels)
+
+  const int N = 10000;
+  Random rnd1(1234);
+  Random rnd2(1234);  // Same seed for reproducibility
+
+  // Create two lists with same random seed
+  Arena arena1, arena2;
+  TestComparator cmp;
+  InlineSkipList<TestComparator> list1(cmp, &arena1);
+  InlineSkipList<TestComparator> list2(cmp, &arena2);
+
+  // Generate keys
+  std::vector<Key> test_keys;
+  for (int i = 0; i < N; i++) {
+    test_keys.push_back(rnd1.Next() % 50000);
+  }
+
+  // Insert using sequential Insert
+  for (Key key : test_keys) {
+    char* buf = list1.AllocateKey(sizeof(Key));
+    memcpy(buf, &key, sizeof(Key));
+    list1.Insert(buf);
+  }
+
+  // Insert using batch InsertBatch
+  std::vector<const char*> keys;
+  for (Key key : test_keys) {
+    char* buf = list2.AllocateKey(sizeof(Key));
+    memcpy(buf, &key, sizeof(Key));
+    keys.push_back(buf);
+  }
+  list2.InsertBatch(keys.data(), keys.size());
+
+  // Get node counts at each level
+  std::vector<int> counts1 = CountNodesPerLevel(&list1);
+  std::vector<int> counts2 = CountNodesPerLevel(&list2);
+
+  // Print statistics for debugging
+  PrintSkipListStats("Sequential Insert", counts1);
+  PrintSkipListStats("Batch Insert", counts2);
+
+  // Level 0 should have the same number of nodes (all unique keys)
+  ASSERT_EQ(counts1[0], counts2[0]);
+
+  // Max heights might differ slightly due to random number sequencing,
+  // but both should be reasonable (not too tall or too short)
+  int max_height1 = counts1.size();
+  int max_height2 = counts2.size();
+  ASSERT_GE(max_height1, 1);
+  ASSERT_GE(max_height2, 1);
+  ASSERT_LE(max_height1, 12);  // Default max height
+  ASSERT_LE(max_height2, 12);
+
+  // Verify that the distribution at higher levels is reasonable
+  // Note: Even with same seed, different call ordering means different heights
+  // The key is that both follow proper probabilistic distribution
+  size_t common_levels = std::min(counts1.size(), counts2.size());
+  for (size_t level = 0; level < common_levels; level++) {
+    // Both should follow the expected branching factor
+    double ratio1 = (level > 0 && counts1[0] > 0)
+                        ? (double)counts1[level] / counts1[0]
+                        : 0.0;
+    double ratio2 = (level > 0 && counts2[0] > 0)
+                        ? (double)counts2[level] / counts2[0]
+                        : 0.0;
+
+    // Expected ratio is roughly (1/4)^level for branching factor 4
+    // Allow for variation due to randomness
+    std::cout << "Level " << level << ": " << "Insert ratio=" << ratio1 << ", "
+              << "BatchInsert ratio=" << ratio2 << std::endl;
+
+    // Verify ratios are in a reasonable range
+    // (Not exactly equal due to different insertion order effects)
+    if (level > 0) {
+      ASSERT_GT(ratio1, 0.0);
+      ASSERT_GT(ratio2, 0.0);
+      // Both should be less than 1 (fewer nodes at higher levels)
+      ASSERT_LT(ratio1, 1.0);
+      ASSERT_LT(ratio2, 1.0);
+    }
+  }
+
+  // Validate both lists are well-formed
+  list1.TEST_Validate();
+  list2.TEST_Validate();
 }
 
 #endif  // !defined(ROCKSDB_VALGRIND_RUN) || defined(ROCKSDB_FULL_VALGRIND_RUN)

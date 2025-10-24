@@ -1792,6 +1792,11 @@ DEFINE_string(merge_operator, "",
 DEFINE_int32(skip_list_lookahead, 0,
              "Used with skip_list memtablerep; try linear search first for "
              "this many steps from the previous position");
+DEFINE_bool(use_skiplist_batch_insert, false,
+            "Use batch insert API for skiplist memtable to improve write "
+            "throughput with prefetching optimization");
+DEFINE_int32(skiplist_batch_size, 16,
+             "Batch size for skiplist batch insert (default: 16)");
 DEFINE_bool(report_file_operations, false,
             "if report number of file operations");
 DEFINE_bool(report_open_timing, false, "if report open timing");

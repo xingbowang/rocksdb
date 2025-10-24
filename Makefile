@@ -1745,6 +1745,9 @@ index_builder_test: $(OBJ_DIR)/table/block_based/index_builder_test.o $(TEST_LIB
 inlineskiplist_test: $(OBJ_DIR)/memtable/inlineskiplist_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+skiplist_batch_bench: $(OBJ_DIR)/memtable/skiplist_batch_bench.o $(LIBRARY)
+	$(AM_LINK)
+
 skiplist_test: $(OBJ_DIR)/memtable/skiplist_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 

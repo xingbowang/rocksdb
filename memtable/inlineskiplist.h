@@ -155,6 +155,10 @@ class InlineSkipList {
   // Validate correctness of the skip-list.
   void TEST_Validate() const;
 
+  // Get the number of nodes at each level (for testing/verification).
+  // Returns a vector where index i contains the count of nodes at level i.
+  std::vector<int> TEST_GetLevelNodeCounts() const;
+
   // Iteration over the contents of a skip list
   class Iterator {
    public:
@@ -930,14 +934,16 @@ size_t InlineSkipList<Comparator>::InsertBatch(const char** keys,
     bool done;              // True if splice found at all levels
   };
 
-  // Use stack allocation for small batches, heap for large
-  KeyInfo* key_infos;
-  KeyInfo stack_key_infos[32];
-  if (batch_size <= 32) {
-    key_infos = stack_key_infos;
-  } else {
-    key_infos = new KeyInfo[batch_size];
+  // Thread-local reusable buffer to avoid repeated allocations
+  // Each thread maintains its own buffer that grows as needed
+  static thread_local std::vector<KeyInfo> tls_key_info_buffer;
+
+  // Ensure buffer is large enough for this batch
+  if (tls_key_info_buffer.size() < batch_size) {
+    tls_key_info_buffer.resize(batch_size);
   }
+
+  KeyInfo* key_infos = tls_key_info_buffer.data();
 
   // Initialize key infos
   int max_key_height = 0;
@@ -1000,57 +1006,72 @@ size_t InlineSkipList<Comparator>::InsertBatch(const char** keys,
 
     // Single pass: process prefetched data, then immediately prefetch next
     for (size_t i = 0; i < batch_size; ++i) {
-      if (key_infos[i].done) {
+      KeyInfo& key_info = key_infos[i];
+
+      if (key_info.done) {
         continue;
       }
 
       // Step 1: Process the prefetched node from last iteration
-      int level = key_infos[i].current_level;
-      Node* before = key_infos[i].current_before;
-      Node* after = key_infos[i].current_after;
-      Node* next = key_infos[i].prefetched_next;
+      int level = key_info.current_level;
+      Node* before = key_info.current_before;
+      Node* after = key_info.current_after;
+      Node* next = key_info.prefetched_next;
 
       assert(before == head_ || next == nullptr ||
              KeyIsAfterNode(next->Key(), before));
-      assert(before == head_ ||
-             KeyIsAfterNode(key_infos[i].key_decoded, before));
+      assert(before == head_ || KeyIsAfterNode(key_info.key_decoded, before));
 
       // Check if we found the splice position at this level
-      if (next == after || !KeyIsAfterNode(key_infos[i].key_decoded, next)) {
+      if (next == after || !KeyIsAfterNode(key_info.key_decoded, next)) {
         // Found splice position at this level
-        key_infos[i].prev[level] = before;
-        key_infos[i].next[level] = next;
+        key_info.prev[level] = before;
+        key_info.next[level] = next;
 
         // Descend to next level if needed
         if (level > 0) {
-          key_infos[i].current_level = level - 1;
-          key_infos[i].current_before = before;
-          key_infos[i].current_after = next;
+          key_info.current_level = level - 1;
+          key_info.current_before = before;
+          key_info.current_after = next;
+
+          // Prefetch for descending path: we'll need before->Next(level-1)
+          // in the next iteration to avoid cache miss
+          Node* next_at_lower_level = before->Next(level - 1);
+          if (next_at_lower_level != nullptr) {
+            // Prefetch the next node's pointers and key at the lower level
+            PREFETCH(next_at_lower_level->Next(level - 1), 0, 1);
+            PREFETCH(next_at_lower_level->Key(), 0, 0);
+
+            // Prefetch one level below if we might descend further
+            if (level > 1) {
+              PREFETCH(next_at_lower_level->Next(level - 2), 0, 1);
+            }
+          }
 
           // If this key doesn't need the next level (because level-1 >=
           // height), copy the splice down for those levels
-          if (level - 1 >= key_infos[i].height) {
-            key_infos[i].prev[level - 1] = before;
-            key_infos[i].next[level - 1] = next;
+          if (level - 1 >= key_info.height) {
+            key_info.prev[level - 1] = before;
+            key_info.next[level - 1] = next;
           }
         } else {
           // Reached level 0, done with all levels for this key
-          key_infos[i].done = true;
+          key_info.done = true;
         }
       } else {
         // Need to advance to next node at this level
-        key_infos[i].current_before = next;
+        key_info.current_before = next;
         // Keep the same 'after' bound
       }
 
       // Step 2: Immediately issue prefetch for next iteration (if still active)
-      if (!key_infos[i].done) {
+      if (!key_info.done) {
         any_active = true;
 
-        int new_level = key_infos[i].current_level;
-        Node* new_before = key_infos[i].current_before;
+        int new_level = key_info.current_level;
+        Node* new_before = key_info.current_before;
         Node* new_next = new_before->Next(new_level);
-        key_infos[i].prefetched_next = new_next;
+        key_info.prefetched_next = new_next;
 
         if (new_next != nullptr) {
           // Prefetch the next pointer at current level
@@ -1137,11 +1158,6 @@ size_t InlineSkipList<Comparator>::InsertBatch(const char** keys,
     if (!is_duplicate) {
       inserted_count++;
     }
-  }
-
-  // Cleanup
-  if (batch_size > 32) {
-    delete[] key_infos;
   }
 
   return inserted_count;
@@ -1439,6 +1455,31 @@ void InlineSkipList<Comparator>::TEST_Validate() const {
   for (int i = 1; i < max_height; i++) {
     assert(nodes[i] != nullptr && nodes[i]->Next(i) == nullptr);
   }
+}
+
+template <class Comparator>
+std::vector<int> InlineSkipList<Comparator>::TEST_GetLevelNodeCounts() const {
+  int max_height = GetMaxHeight();
+  std::vector<int> level_counts(max_height, 0);
+
+  // For each level, traverse and count nodes
+  for (int level = 0; level < max_height; ++level) {
+    Node* node = head_;
+    int count = 0;
+
+    // Traverse this level
+    while (true) {
+      node = node->Next(level);
+      if (node == nullptr) {
+        break;
+      }
+      count++;
+    }
+
+    level_counts[level] = count;
+  }
+
+  return level_counts;
 }
 
 template <class Comparator>
