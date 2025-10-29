@@ -516,6 +516,10 @@ class BlockBasedTable : public TableReader {
                            InternalIterator* meta_iter,
                            const InternalKeyComparator& internal_comparator,
                            BlockCacheLookupContext* lookup_context);
+  Status CreateDataBlockIterator(
+      DataBlockIter** biter, const ReadOptions& read_options,
+      const BlockHandle& block_handle, GetContext* get_context,
+      BlockCacheLookupContext* lookup_data_block_context);
   // If index and filter blocks do not need to be pinned, `prefetch_all`
   // determines whether they will be read and add to cache.
   Status PrefetchIndexAndFilterBlocks(

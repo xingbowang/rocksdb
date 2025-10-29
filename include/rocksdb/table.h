@@ -45,6 +45,7 @@ class WritableFileWriter;
 struct ConfigOptions;
 struct EnvOptions;
 class UserDefinedIndexFactory;
+class UserDefinedBlockFactory;
 
 // Types of checksums to use for checking integrity of logical blocks within
 // files. All checksums currently use 32 bits of checking power (1 in 4B
@@ -508,6 +509,8 @@ struct BlockBasedTableOptions {
   // NOTE: UserDefinedIndexFactory currently disables parallel compression
   // (CompressionOptions::parallel_threads sanitized to 1).
   std::shared_ptr<UserDefinedIndexFactory> user_defined_index_factory = nullptr;
+
+  std::shared_ptr<UserDefinedBlockFactory> user_defined_block_factory = nullptr;
 
   // EXPERIMENTAL
   //

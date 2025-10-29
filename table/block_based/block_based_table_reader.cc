@@ -46,6 +46,7 @@
 #include "rocksdb/table.h"
 #include "rocksdb/table_properties.h"
 #include "rocksdb/trace_record.h"
+#include "rocksdb/user_defined_block.h"
 #include "rocksdb/user_defined_index.h"
 #include "table/block_based/binary_search_index_reader.h"
 #include "table/block_based/block.h"
@@ -1178,6 +1179,35 @@ Status BlockBasedTable::ReadPropertiesBlock(
   return s;
 }
 
+Status BlockBasedTable::CreateDataBlockIterator(
+    DataBlockIter** biter, const ReadOptions& read_options,
+    const BlockHandle& block_handle, GetContext* get_context,
+    BlockCacheLookupContext* lookup_context) {
+  *biter = nullptr;
+  Status s;
+  if (rep_->table_options.user_defined_block_factory != nullptr) {
+    UserDefinedBlockOption udb_option;
+    udb_option.comparator = rep_->internal_comparator.user_comparator();
+    s = rep_->table_options.user_defined_block_factory->NewIterator(udb_option,
+                                                                    biter);
+    if (!s.ok()) {
+      ROCKS_LOG_WARN(
+          rep_->ioptions.logger,
+          "Error when try to create User Defined Block Iterator : %s",
+          s.ToString().c_str());
+      return s;
+    }
+  }
+
+  *biter = NewDataBlockIterator<DataBlockIter>(
+      read_options, block_handle, *biter, /*type=*/BlockType::kData,
+      get_context, lookup_context,
+      /*prefetch_buffer=*/nullptr, /*for_compaction=*/false,
+      /*async_read=*/false, s, /*use_block_cache_for_lookup=*/true);
+
+  return s;
+}
+
 Status BlockBasedTable::ReadRangeDelBlock(
     const ReadOptions& read_options, FilePrefetchBuffer* prefetch_buffer,
     InternalIterator* meta_iter,
@@ -1690,6 +1720,24 @@ template <>
 DataBlockIter* BlockBasedTable::InitBlockIterator<DataBlockIter>(
     const Rep* rep, Block* block, BlockType block_type,
     DataBlockIter* input_iter, bool block_contents_pinned) {
+  // Check if this is a user-defined block with custom format
+  // Block_kUserDefinedData* is polymorphically stored as Block_kData*
+  if (rep->table_options.user_defined_block_factory != nullptr &&
+      rep->table_options.user_defined_block_factory->UsesCustomBlockFormat() &&
+      block_type == BlockType::kData) {
+    // Cast to Block_kUserDefinedData to access the custom block interface
+    // This is safe because BlockCreateContext::Create() ensures that when
+    // UsesCustomBlockFormat() is true, it creates Block_kUserDefinedData
+    auto* user_defined_block = reinterpret_cast<Block_kUserDefinedData*>(block);
+
+    // Delegate to the user-defined block implementation
+    return user_defined_block->NewDataIterator(
+        rep->internal_comparator.user_comparator(),
+        rep->get_global_seqno(block_type), input_iter, rep->ioptions.stats,
+        block_contents_pinned, rep->user_defined_timestamps_persisted);
+  }
+
+  // Standard RocksDB block format
   return block->NewDataIterator(rep->internal_comparator.user_comparator(),
                                 rep->get_global_seqno(block_type), input_iter,
                                 rep->ioptions.stats, block_contents_pinned,
@@ -2559,14 +2607,17 @@ Status BlockBasedTable::Get(const ReadOptions& read_options, const Slice& key,
           /*get_from_user_specified_snapshot=*/read_options.snapshot !=
               nullptr};
       bool does_referenced_key_exist = false;
-      DataBlockIter biter;
       uint64_t referenced_data_size = 0;
-      Status tmp_status;
-      NewDataBlockIterator<DataBlockIter>(
-          read_options, v.handle, &biter, BlockType::kData, get_context,
-          &lookup_data_block_context, /*prefetch_buffer=*/nullptr,
-          /*for_compaction=*/false, /*async_read=*/false, tmp_status,
-          /*use_block_cache_for_lookup=*/true);
+
+      DataBlockIter* input_biter = nullptr;
+      Status tmp_status =
+          CreateDataBlockIterator(&input_biter, read_options, v.handle,
+                                  get_context, &lookup_data_block_context);
+
+      if (!tmp_status.ok()) {
+        return tmp_status;
+      }
+      DataBlockIter& biter = *input_biter;
 
       if (read_options.read_tier == kBlockCacheTier &&
           biter.status().IsIncomplete()) {
@@ -2739,13 +2790,15 @@ Status BlockBasedTable::Prefetch(const ReadOptions& read_options,
     }
 
     // Load the block specified by the block_handle into the block cache
-    DataBlockIter biter;
-    Status tmp_status;
-    NewDataBlockIterator<DataBlockIter>(
-        read_options, block_handle, &biter, /*type=*/BlockType::kData,
-        /*get_context=*/nullptr, &lookup_context,
-        /*prefetch_buffer=*/nullptr, /*for_compaction=*/false,
-        /*async_read=*/false, tmp_status, /*use_block_cache_for_lookup=*/true);
+    DataBlockIter* input_biter = nullptr;
+    Status tmp_status =
+        CreateDataBlockIterator(&input_biter, read_options, block_handle,
+                                /*get_context=*/nullptr, &lookup_context);
+
+    if (!tmp_status.ok()) {
+      return tmp_status;
+    }
+    DataBlockIter& biter = *input_biter;
 
     if (!biter.status().ok()) {
       // there was an unexpected error while pre-fetching
@@ -2869,6 +2922,10 @@ BlockType BlockBasedTable::GetBlockTypeForMetaBlockByName(
 
   if (meta_block_name.starts_with(kUserDefinedIndexPrefix)) {
     return BlockType::kUserDefinedIndex;
+  }
+
+  if (meta_block_name.starts_with(kUserDefinedBlockPrefix)) {
+    return BlockType::kUserDefinedBlock;
   }
 
   if (meta_block_name.starts_with(kObsoleteFilterBlockPrefix)) {
@@ -3193,13 +3250,17 @@ Status BlockBasedTable::GetKVPairsFromDataBlocks(
     }
 
     std::unique_ptr<InternalIterator> datablock_iter;
-    Status tmp_status;
-    datablock_iter.reset(NewDataBlockIterator<DataBlockIter>(
-        read_options, blockhandles_iter->value().handle,
-        /*input_iter=*/nullptr, /*type=*/BlockType::kData,
-        /*get_context=*/nullptr, /*lookup_context=*/nullptr,
-        /*prefetch_buffer=*/nullptr, /*for_compaction=*/false,
-        /*async_read=*/false, tmp_status, /*use_block_cache_for_lookup=*/true));
+
+    DataBlockIter* input_biter = nullptr;
+    Status tmp_status = CreateDataBlockIterator(
+        &input_biter, read_options, blockhandles_iter->value().handle,
+        /*get_context=*/nullptr, /*lookup_context=*/nullptr);
+
+    if (!tmp_status.ok()) {
+      return tmp_status;
+    }
+
+    datablock_iter.reset(input_biter);
     s = datablock_iter->status();
 
     if (!s.ok()) {
@@ -3430,13 +3491,17 @@ Status BlockBasedTable::DumpDataBlocks(std::ostream& out_stream) {
     out_stream << "--------------------------------------\n";
 
     std::unique_ptr<InternalIterator> datablock_iter;
-    Status tmp_status;
-    datablock_iter.reset(NewDataBlockIterator<DataBlockIter>(
-        read_options, blockhandles_iter->value().handle,
-        /*input_iter=*/nullptr, /*type=*/BlockType::kData,
-        /*get_context=*/nullptr, /*lookup_context=*/nullptr,
-        /*prefetch_buffer=*/nullptr, /*for_compaction=*/false,
-        /*async_read=*/false, tmp_status, /*use_block_cache_for_lookup=*/true));
+
+    DataBlockIter* input_biter = nullptr;
+    Status tmp_status = CreateDataBlockIterator(
+        &input_biter, read_options, blockhandles_iter->value().handle,
+        /*get_context=*/nullptr, /*lookup_context=*/nullptr);
+
+    if (!tmp_status.ok()) {
+      return tmp_status;
+    }
+
+    datablock_iter.reset(input_biter);
     s = datablock_iter->status();
 
     if (!s.ok()) {

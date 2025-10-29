@@ -598,6 +598,7 @@ TEST_MAIN_SOURCES =                                                     \
   table/merger_test.cc                                                  \
   table/sst_file_reader_test.cc                                         \
   table/table_test.cc                                                   \
+  table/user_defined_block_test.cc                                      \
   table/block_fetcher_test.cc                                           \
   test_util/testutil_test.cc                                            \
   util/compression_test.cc                                            \

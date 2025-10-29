@@ -32,12 +32,13 @@ class BlockBuilder {
                         size_t ts_sz = 0,
                         bool persist_user_defined_timestamps = true,
                         bool is_user_key = false);
+  virtual ~BlockBuilder() = default;
 
   // Reset the contents as if the BlockBuilder was just constructed.
-  void Reset();
+  virtual void Reset();
 
   // Swap the contents in BlockBuilder with buffer, then reset the BlockBuilder.
-  void SwapAndReset(std::string& buffer);
+  virtual void SwapAndReset(std::string& buffer);
 
   // REQUIRES: Finish() has not been called since the last call to Reset().
   // REQUIRES: Unless a range tombstone block, key is larger than any previously
@@ -45,9 +46,9 @@ class BlockBuilder {
   // DO NOT mix with AddWithLastKey() between Resets. For efficiency, use
   // AddWithLastKey() in contexts where previous added key is already known
   // and delta encoding might be used.
-  void Add(const Slice& key, const Slice& value,
-           const Slice* const delta_value = nullptr,
-           bool skip_delta_encoding = false);
+  virtual void Add(const Slice& key, const Slice& value,
+                   const Slice* const delta_value = nullptr,
+                   bool skip_delta_encoding = false);
 
   // A faster version of Add() if the previous key is already known for all
   // Add()s.
@@ -58,31 +59,32 @@ class BlockBuilder {
   // is the key from most recent AddWithLastKey. (For convenience, last_key
   // is ignored on first call after creation or Reset().)
   // DO NOT mix with Add() between Resets.
-  void AddWithLastKey(const Slice& key, const Slice& value,
-                      const Slice& last_key,
-                      const Slice* const delta_value = nullptr,
-                      bool skip_delta_encoding = false);
+  virtual void AddWithLastKey(const Slice& key, const Slice& value,
+                              const Slice& last_key,
+                              const Slice* const delta_value = nullptr,
+                              bool skip_delta_encoding = false);
 
   // Finish building the block and return a slice that refers to the
   // block contents.  The returned slice will remain valid for the
   // lifetime of this builder or until Reset() is called.
-  Slice Finish();
+  virtual Slice Finish();
 
   // Returns an estimate of the current (uncompressed) size of the block
   // we are building.
-  inline size_t CurrentSizeEstimate() const {
+  virtual inline size_t CurrentSizeEstimate() const {
     return estimate_ + (data_block_hash_index_builder_.Valid()
                             ? data_block_hash_index_builder_.EstimateSize()
                             : 0);
   }
 
   // Returns an estimated block size after appending key and value.
-  size_t EstimateSizeAfterKV(const Slice& key, const Slice& value) const;
+  virtual size_t EstimateSizeAfterKV(const Slice& key,
+                                     const Slice& value) const;
 
   // Return true iff no entries have been added since the last Reset()
-  bool empty() const { return buffer_.empty(); }
+  virtual bool empty() const { return buffer_.empty(); }
 
-  std::string& MutableBuffer() { return buffer_; }
+  virtual std::string& MutableBuffer() { return buffer_; }
 
  private:
   inline void AddWithLastKeyImpl(const Slice& key, const Slice& value,
