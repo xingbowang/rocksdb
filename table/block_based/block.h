@@ -161,7 +161,7 @@ class Block {
   Block(const Block&) = delete;
   void operator=(const Block&) = delete;
 
-  ~Block();
+  virtual ~Block();
 
   size_t size() const { return contents_.data.size(); }
   const char* data() const { return contents_.data.data(); }
@@ -194,12 +194,11 @@ class Block {
   // NOTE: for the hash based lookup, if a key prefix doesn't match any key,
   // the iterator will simply be set as "invalid", rather than returning
   // the key that is just pass the target key.
-  DataBlockIter* NewDataIterator(const Comparator* raw_ucmp,
-                                 SequenceNumber global_seqno,
-                                 DataBlockIter* iter = nullptr,
-                                 Statistics* stats = nullptr,
-                                 bool block_contents_pinned = false,
-                                 bool user_defined_timestamps_persisted = true);
+  virtual DataBlockIter* NewDataIterator(
+      const Comparator* raw_ucmp, SequenceNumber global_seqno,
+      DataBlockIter* iter = nullptr, Statistics* stats = nullptr,
+      bool block_contents_pinned = false,
+      bool user_defined_timestamps_persisted = true);
 
   // Returns an MetaBlockIter for iterating over blocks containing metadata
   // (like Properties blocks).  Unlike data blocks, the keys for these blocks
@@ -242,10 +241,10 @@ class Block {
       BlockPrefixIndex* prefix_index = nullptr);
 
   // Report an approximation of how much memory has been used.
-  size_t ApproximateMemoryUsage() const;
+  virtual size_t ApproximateMemoryUsage() const;
 
   // For TypedCacheInterface
-  const Slice& ContentSlice() const { return contents_.data; }
+  virtual const Slice& ContentSlice() const { return contents_.data; }
 
   // Initializes per key-value checksum protection.
   // After this method is called, each DataBlockIterator returned
@@ -275,8 +274,10 @@ class Block {
 
   const char* TEST_GetKVChecksum() const { return kv_checksum_; }
 
- private:
+ protected:
   BlockContents contents_;
+
+ private:
   uint32_t restart_offset_;  // Offset in data_ of restart array
   uint32_t num_restarts_;
   std::unique_ptr<BlockReadAmpBitmap> read_amp_bitmap_;

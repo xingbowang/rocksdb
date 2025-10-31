@@ -80,36 +80,6 @@ class Block_kUserDefinedIndex : public BlockContents {
   const Slice& ContentSlice() const { return data; }
 };
 
-// Wrapper for user-defined data blocks with custom formats.
-// This allows users to implement their own block formats (e.g., columnar,
-// compressed, encrypted) by implementing the UserDefinedBlock interface.
-// The actual block implementation is provided by UserDefinedBlockFactory.
-class Block_kUserDefinedData {
- public:
-  static constexpr CacheEntryRole kCacheEntryRole = CacheEntryRole::kDataBlock;
-  static constexpr BlockType kBlockType = BlockType::kData;
-
-  // Constructor takes ownership of the user-defined block implementation
-  explicit Block_kUserDefinedData(UserDefinedBlock* block);
-
-  ~Block_kUserDefinedData();
-
-  // Delegate to the user-defined block implementation
-  size_t ApproximateMemoryUsage() const;
-
-  const Slice& ContentSlice() const;
-
-  DataBlockIter* NewDataIterator(const Comparator* raw_ucmp,
-                                 SequenceNumber global_seqno,
-                                 DataBlockIter* input_iter = nullptr,
-                                 Statistics* stats = nullptr,
-                                 bool block_contents_pinned = false,
-                                 bool user_defined_timestamps_persisted = true);
-
- private:
-  UserDefinedBlock* block_;  // Owned by this object
-};
-
 struct BlockCreateContext : public Cache::CreateContext {
   BlockCreateContext() {}
   BlockCreateContext(const BlockBasedTableOptions* _table_options,

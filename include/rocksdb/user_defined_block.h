@@ -60,6 +60,8 @@ class UserDefinedBlock {
  public:
   virtual ~UserDefinedBlock() = default;
 
+  virtual Status InitBlock(BlockContents* contents) = 0;
+
   // Returns the approximate memory usage of this block, including any
   // auxiliary data structures (indexes, caches, etc.).
   // This is used for cache accounting and memory budgeting.
@@ -201,7 +203,6 @@ class UserDefinedBlockFactory : public Customizable {
   //   }
   //
   virtual Status NewBlock(const UserDefinedBlockOption& /*option*/,
-                          BlockContents&& /*contents*/,
                           std::unique_ptr<UserDefinedBlock>* /*block*/) const {
     // Default implementation: not supported
     // Users who want custom block formats must override this method

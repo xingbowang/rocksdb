@@ -391,33 +391,29 @@ class UserDefinedBlockTestBase : public testing::Test {
   // PAXBlock: Implements UserDefinedBlock interface for columnar storage
   class PAXBlock : public UserDefinedBlock {
    public:
-    explicit PAXBlock(BlockContents&& contents,
-                      const Comparator* /*comparator*/)
-        : contents_(std::move(contents)) {}
-
-    ~PAXBlock() override = default;
-
-    // Parse PAX format from raw bytes
-    Status Parse() {
+    Status InitBlock(BlockContents* contents) override {
+      contents_ = contents;
       // The data is already parsed in the iterator, just validate
-      if (contents_.data.empty()) {
+      if (contents_->data.empty()) {
         return Status::Corruption("Empty block contents");
       }
       return Status::OK();
     }
 
+    ~PAXBlock() override = default;
+
     // UserDefinedBlock interface
     size_t ApproximateMemoryUsage() const override {
-      return contents_.ApproximateMemoryUsage() + sizeof(*this);
+      return contents_->ApproximateMemoryUsage() + sizeof(*this);
     }
 
-    const Slice& ContentSlice() const override { return contents_.data; }
+    const Slice& ContentSlice() const override { return contents_->data; }
 
-    size_t size() const override { return contents_.data.size(); }
+    size_t size() const override { return contents_->data.size(); }
 
-    const char* data() const override { return contents_.data.data(); }
+    const char* data() const override { return contents_->data.data(); }
 
-    bool own_bytes() const override { return contents_.own_bytes(); }
+    bool own_bytes() const override { return contents_->own_bytes(); }
 
     DataBlockIter* NewDataIterator(
         const Comparator* raw_ucmp, SequenceNumber global_seqno,
@@ -436,7 +432,7 @@ class UserDefinedBlockTestBase : public testing::Test {
       }
 
       // Initialize the iterator with block data
-      iter->Initialize(raw_ucmp, contents_.data.data(), 0, 0, global_seqno,
+      iter->Initialize(raw_ucmp, contents_->data.data(), 0, 0, global_seqno,
                        nullptr, block_contents_pinned,
                        user_defined_timestamps_persisted, nullptr, 0, nullptr,
                        1);
@@ -445,7 +441,7 @@ class UserDefinedBlockTestBase : public testing::Test {
     }
 
    private:
-    BlockContents contents_;
+    BlockContents* contents_;
   };
 
   class TestUserDefinedBlockFactory : public UserDefinedBlockFactory {
@@ -468,17 +464,8 @@ class UserDefinedBlockTestBase : public testing::Test {
 
     // NEW API: Create custom block from raw bytes
     Status NewBlock(const UserDefinedBlockOption& option,
-                    BlockContents&& contents,
                     std::unique_ptr<UserDefinedBlock>* block) const override {
-      auto pax_block =
-          std::make_unique<PAXBlock>(std::move(contents), option.comparator);
-
-      Status s = pax_block->Parse();
-      if (!s.ok()) {
-        return s;
-      }
-
-      *block = std::move(pax_block);
+      *block = std::make_unique<PAXBlock>();
       return Status::OK();
     }
 

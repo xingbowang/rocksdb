@@ -7,12 +7,18 @@
 
 #include "rocksdb/user_defined_block.h"
 #include "table/block_based/block_based_table_reader.h"
+#include "table/block_based/user_defined_block_wrapper.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 // Block_kUserDefinedData implementation
 Block_kUserDefinedData::Block_kUserDefinedData(UserDefinedBlock* block)
-    : block_(block) {}
+    : Block(BlockContents()), block_(block) {
+  // Note: We pass an empty BlockContents to the base Block constructor because
+  // user-defined blocks manage their own data. The Block base class methods
+  // won't be called - all relevant methods are overridden to delegate to
+  // block_.
+}
 
 Block_kUserDefinedData::~Block_kUserDefinedData() { delete block_; }
 
@@ -44,16 +50,15 @@ void BlockCreateContext::Create(std::unique_ptr<Block_kData>* parsed_out,
     option.comparator = raw_ucmp;
 
     Status s = table_options->user_defined_block_factory->NewBlock(
-        option, std::move(block), &custom_block);
+        option, &custom_block);
 
-    if (s.ok() && custom_block != nullptr) {
-      // Wrap the user-defined block in Block_kUserDefinedData for cache
-      // compatibility. Note: We use Block_kData* but it actually points to a
-      // Block_kUserDefinedData. This works because cache only uses the
-      // interface methods (ApproximateMemoryUsage, ContentSlice, etc.)
-      // TODO: Refactor cache to use a common base class for all block types
-      parsed_out->reset(reinterpret_cast<Block_kData*>(
-          new Block_kUserDefinedData(custom_block.release())));
+    auto udb_wrapper = std::make_unique<UserDefinedBlockWrapper>(
+        std::move(custom_block), std::move(block),
+        table_options->read_amp_bytes_per_bit, statistics);
+    s = udb_wrapper->InitBlock();
+
+    if (s.ok()) {
+      parsed_out->reset(udb_wrapper.release());
       return;
     }
     // If custom block creation failed, fall through to standard block
