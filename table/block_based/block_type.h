@@ -28,6 +28,7 @@ enum class BlockType : uint8_t {
   kMetaIndex,
   kIndex,
   kUserDefinedIndex,
+  kUserDefinedBlock,
   // Note: keep kInvalid the last value when adding new enum values.
   kInvalid
 };

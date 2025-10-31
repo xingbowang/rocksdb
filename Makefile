@@ -1730,6 +1730,9 @@ cleanable_test: $(OBJ_DIR)/table/cleanable_test.o $(TEST_LIBRARY) $(LIBRARY)
 table_test: $(OBJ_DIR)/table/table_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+user_defined_block_test: $(OBJ_DIR)/table/user_defined_block_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 block_fetcher_test: table/block_fetcher_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 

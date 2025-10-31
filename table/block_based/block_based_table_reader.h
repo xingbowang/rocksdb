@@ -343,6 +343,17 @@ class BlockBasedTable : public TableReader {
 
   friend class UncompressionDictReader;
 
+  Status CreateDataBlockIterator(
+      DataBlockIter** biter, const ReadOptions& read_options,
+      const BlockHandle& block_handle, GetContext* get_context,
+      BlockCacheLookupContext* lookup_data_block_context,
+      FilePrefetchBuffer* prefetch_buffer, bool for_compaction, bool async_read,
+      Status& s, bool use_block_cache_for_lookup) const;
+
+  Status CreateDataBlockIterator(const ReadOptions& read_options,
+                                 CachableEntry<Block>& block,
+                                 DataBlockIter** biter, Status s) const;
+
  protected:
   Rep* rep_;
   explicit BlockBasedTable(Rep* rep, BlockCacheTracer* const block_cache_tracer)
@@ -355,6 +366,8 @@ class BlockBasedTable : public TableReader {
   friend class MockedBlockBasedTable;
   friend class BlockBasedTableReaderTestVerifyChecksum_ChecksumMismatch_Test;
   BlockCacheTracer* const block_cache_tracer_;
+
+  Status TryInitUserDefinedBlockIterator(DataBlockIter** biter) const;
 
   void UpdateCacheHitMetrics(BlockType block_type, GetContext* get_context,
                              size_t usage) const;

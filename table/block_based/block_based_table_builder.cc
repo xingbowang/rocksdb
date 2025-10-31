@@ -38,6 +38,7 @@
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/table.h"
 #include "rocksdb/types.h"
+#include "rocksdb/user_defined_block.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "table/block_based/block_based_table_reader.h"
@@ -796,7 +797,7 @@ struct BlockBasedTableBuilder::Rep {
   // but can be read by other threads to estimate current file size
   RelaxedAtomic<uint64_t> offset{0};
   size_t alignment;
-  BlockBuilder data_block;
+  std::unique_ptr<BlockBuilder> data_block;
   // Buffers uncompressed data blocks to replay later. Needed when
   // compression dictionary is enabled so we can finalize the dictionary before
   // compressing any data blocks.
@@ -1013,15 +1014,7 @@ struct BlockBasedTableBuilder::Rep {
                       ? std::min(static_cast<size_t>(table_options.block_size),
                                  kDefaultPageSize)
                       : 0),
-        data_block(table_options.block_restart_interval,
-                   table_options.use_delta_encoding,
-                   false /* use_value_delta_encoding */,
-                   tbo.internal_comparator.user_comparator()
-                           ->CanKeysWithDifferentByteContentsBeEqual()
-                       ? BlockBasedTableOptions::kDataBlockBinarySearch
-                       : table_options.data_block_index_type,
-                   table_options.data_block_hash_table_util_ratio, ts_sz,
-                   persist_user_defined_timestamps),
+        data_block(nullptr),
         range_del_block(
             1 /* block_restart_interval */, true /* use_delta_encoding */,
             false /* use_value_delta_encoding */,
@@ -1041,9 +1034,7 @@ struct BlockBasedTableBuilder::Rep {
         use_delta_encoding_for_index_values(table_opt.format_version >= 4 &&
                                             !table_opt.block_align),
         reason(tbo.reason),
-        flush_block_policy(
-            table_options.flush_block_policy_factory->NewFlushBlockPolicy(
-                table_options, data_block)),
+        flush_block_policy(nullptr),
         create_context(&table_options, &ioptions, ioptions.stats,
                        /*decompressor=*/nullptr,
                        tbo.moptions.block_protection_bytes_per_key,
@@ -1052,6 +1043,28 @@ struct BlockBasedTableBuilder::Rep {
                        table_opt.index_type ==
                            BlockBasedTableOptions::kBinarySearchWithFirstKey),
         tail_size(0) {
+    if (table_options.user_defined_block_factory != nullptr) {
+      // TODO : expand UserDefinedBlockOption to add more options
+      UserDefinedBlockOption udb_option;
+      auto s = table_options.user_defined_block_factory->NewBuilder(udb_option,
+                                                                    data_block);
+    } else {
+      data_block = std::make_unique<BlockBuilder>(
+          table_options.block_restart_interval,
+          table_options.use_delta_encoding,
+          false /* use_value_delta_encoding */,
+          tbo.internal_comparator.user_comparator()
+                  ->CanKeysWithDifferentByteContentsBeEqual()
+              ? BlockBasedTableOptions::kDataBlockBinarySearch
+              : table_options.data_block_index_type,
+          table_options.data_block_hash_table_util_ratio, ts_sz,
+          persist_user_defined_timestamps);
+    }
+
+    flush_block_policy = std::unique_ptr<FlushBlockPolicy>(
+        table_options.flush_block_policy_factory->NewFlushBlockPolicy(
+            table_options, *data_block));
+
     FilterBuildingContext filter_context(table_options);
 
     filter_context.info_log = ioptions.logger;
@@ -1449,7 +1462,7 @@ void BlockBasedTableBuilder::Add(const Slice& ikey, const Slice& value) {
 
     auto should_flush = r->flush_block_policy->Update(ikey, value);
     if (should_flush) {
-      assert(!r->data_block.empty());
+      assert(!r->data_block->empty());
       Flush(/*first_key_in_next_block=*/&ikey);
     }
 
@@ -1467,7 +1480,7 @@ void BlockBasedTableBuilder::Add(const Slice& ikey, const Slice& value) {
       }
     }
 
-    r->data_block.AddWithLastKey(ikey, value, r->last_ikey);
+    r->data_block->AddWithLastKey(ikey, value, r->last_ikey);
     r->last_ikey.assign(ikey.data(), ikey.size());
     assert(!r->last_ikey.empty());
     if (r->state == Rep::State::kBuffered) {
@@ -1527,10 +1540,10 @@ void BlockBasedTableBuilder::Flush(const Slice* first_key_in_next_block) {
   if (UNLIKELY(!ok())) {
     return;
   }
-  if (r->data_block.empty()) {
+  if (r->data_block->empty()) {
     return;
   }
-  Slice uncompressed_block_data = r->data_block.Finish();
+  Slice uncompressed_block_data = r->data_block->Finish();
 
   // NOTE: compression sampling is done here in the same thread as building
   // the uncompressed block because of the requirements to call table
@@ -1605,20 +1618,20 @@ void BlockBasedTableBuilder::Flush(const Slice* first_key_in_next_block) {
   if (rep_->state == Rep::State::kBuffered) {
     std::string uncompressed_block_holder;
     uncompressed_block_holder.reserve(rep_->table_options.block_size);
-    r->data_block.SwapAndReset(uncompressed_block_holder);
+    r->data_block->SwapAndReset(uncompressed_block_holder);
     assert(uncompressed_block_data.size() == uncompressed_block_holder.size());
     rep_->data_block_buffers.emplace_back(std::move(uncompressed_block_holder));
     rep_->data_begin_offset += uncompressed_block_data.size();
     MaybeEnterUnbuffered(first_key_in_next_block);
   } else {
     if (r->IsParallelCompressionActive()) {
-      EmitBlockForParallel(r->data_block.MutableBuffer(), r->last_ikey,
+      EmitBlockForParallel(r->data_block->MutableBuffer(), r->last_ikey,
                            first_key_in_next_block);
     } else {
-      EmitBlock(r->data_block.MutableBuffer(), r->last_ikey,
+      EmitBlock(r->data_block->MutableBuffer(), r->last_ikey,
                 first_key_in_next_block);
     }
-    r->data_block.Reset();
+    r->data_block->Reset();
   }
 }
 

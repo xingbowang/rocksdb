@@ -5,12 +5,61 @@
 
 #include "table/block_based/block_cache.h"
 
+#include "rocksdb/user_defined_block.h"
 #include "table/block_based/block_based_table_reader.h"
 
 namespace ROCKSDB_NAMESPACE {
 
+// Block_kUserDefinedData implementation
+Block_kUserDefinedData::Block_kUserDefinedData(UserDefinedBlock* block)
+    : block_(block) {}
+
+Block_kUserDefinedData::~Block_kUserDefinedData() { delete block_; }
+
+size_t Block_kUserDefinedData::ApproximateMemoryUsage() const {
+  return block_->ApproximateMemoryUsage();
+}
+
+const Slice& Block_kUserDefinedData::ContentSlice() const {
+  return block_->ContentSlice();
+}
+
+DataBlockIter* Block_kUserDefinedData::NewDataIterator(
+    const Comparator* raw_ucmp, SequenceNumber global_seqno,
+    DataBlockIter* input_iter, Statistics* stats, bool block_contents_pinned,
+    bool user_defined_timestamps_persisted) {
+  return block_->NewDataIterator(raw_ucmp, global_seqno, input_iter, stats,
+                                 block_contents_pinned,
+                                 user_defined_timestamps_persisted);
+}
+
 void BlockCreateContext::Create(std::unique_ptr<Block_kData>* parsed_out,
                                 BlockContents&& block) {
+  // Check if user-defined block factory is present and supports custom format
+  if (table_options->user_defined_block_factory != nullptr &&
+      table_options->user_defined_block_factory->UsesCustomBlockFormat()) {
+    // Use the user-defined block factory to create a custom block
+    std::unique_ptr<UserDefinedBlock> custom_block;
+    UserDefinedBlockOption option;
+    option.comparator = raw_ucmp;
+
+    Status s = table_options->user_defined_block_factory->NewBlock(
+        option, std::move(block), &custom_block);
+
+    if (s.ok() && custom_block != nullptr) {
+      // Wrap the user-defined block in Block_kUserDefinedData for cache
+      // compatibility. Note: We use Block_kData* but it actually points to a
+      // Block_kUserDefinedData. This works because cache only uses the
+      // interface methods (ApproximateMemoryUsage, ContentSlice, etc.)
+      // TODO: Refactor cache to use a common base class for all block types
+      parsed_out->reset(reinterpret_cast<Block_kData*>(
+          new Block_kUserDefinedData(custom_block.release())));
+      return;
+    }
+    // If custom block creation failed, fall through to standard block
+  }
+
+  // Standard RocksDB block format
   parsed_out->reset(new Block_kData(
       std::move(block), table_options->read_amp_bytes_per_bit, statistics));
   parsed_out->get()->InitializeDataBlockProtectionInfo(protection_bytes_per_key,

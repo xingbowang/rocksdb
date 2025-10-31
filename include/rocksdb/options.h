@@ -58,6 +58,7 @@ class InternalKeyComparator;
 class WalFilter;
 class FileSystem;
 class UserDefinedIndexFactory;
+class UserDefinedBlockFactory;
 
 struct Options;
 struct DbPath;
@@ -2190,6 +2191,8 @@ struct ReadOptions {
   // is supported. SeekToFirst() is not supported. If the caller wishes to scan
   // from start to end, the native index must be used.
   const UserDefinedIndexFactory* table_index_factory = nullptr;
+
+  const UserDefinedBlockFactory* table_block_factory = nullptr;
 
   // *** END options only relevant to iterators or scans ***
 
