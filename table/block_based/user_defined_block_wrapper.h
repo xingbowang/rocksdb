@@ -31,12 +31,13 @@ class UserDefinedBlockWrapper : public Block_kData {
                           BlockContents&& contents,
                           size_t read_amp_bytes_per_bit = 0,
                           Statistics* statistics = nullptr)
-      : Block_kData(std::move(contents), read_amp_bytes_per_bit, statistics),
+      : Block_kData(std::move(contents), read_amp_bytes_per_bit, statistics,
+                    /*skip_initialization*/ true),
         block_(std::move(block)) {}
 
   Status InitBlock() { return block_->InitBlock(&contents_); }
 
-  ~UserDefinedBlockWrapper() override;
+  ~UserDefinedBlockWrapper() override = default;
 
   // Override Block methods to delegate to the user-defined block implementation
   size_t ApproximateMemoryUsage() const override {

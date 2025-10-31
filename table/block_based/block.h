@@ -156,7 +156,8 @@ class Block {
  public:
   // Initialize the block with the specified contents.
   explicit Block(BlockContents&& contents, size_t read_amp_bytes_per_bit = 0,
-                 Statistics* statistics = nullptr);
+                 Statistics* statistics = nullptr,
+                 bool skip_initialization = false);
   // No copying allowed
   Block(const Block&) = delete;
   void operator=(const Block&) = delete;

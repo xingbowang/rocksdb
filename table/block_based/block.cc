@@ -1058,8 +1058,11 @@ Block::~Block() {
 }
 
 Block::Block(BlockContents&& contents, size_t read_amp_bytes_per_bit,
-             Statistics* statistics)
+             Statistics* statistics, bool skip_initialization)
     : contents_(std::move(contents)), restart_offset_(0), num_restarts_(0) {
+  if (skip_initialization) {
+    return;
+  }
   TEST_SYNC_POINT("Block::Block:0");
   auto& size = contents_.data.size_;
   if (size < sizeof(uint32_t)) {

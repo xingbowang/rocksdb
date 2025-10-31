@@ -11,49 +11,21 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-// Block_kUserDefinedData implementation
-Block_kUserDefinedData::Block_kUserDefinedData(UserDefinedBlock* block)
-    : Block(BlockContents()), block_(block) {
-  // Note: We pass an empty BlockContents to the base Block constructor because
-  // user-defined blocks manage their own data. The Block base class methods
-  // won't be called - all relevant methods are overridden to delegate to
-  // block_.
-}
-
-Block_kUserDefinedData::~Block_kUserDefinedData() { delete block_; }
-
-size_t Block_kUserDefinedData::ApproximateMemoryUsage() const {
-  return block_->ApproximateMemoryUsage();
-}
-
-const Slice& Block_kUserDefinedData::ContentSlice() const {
-  return block_->ContentSlice();
-}
-
-DataBlockIter* Block_kUserDefinedData::NewDataIterator(
-    const Comparator* raw_ucmp, SequenceNumber global_seqno,
-    DataBlockIter* input_iter, Statistics* stats, bool block_contents_pinned,
-    bool user_defined_timestamps_persisted) {
-  return block_->NewDataIterator(raw_ucmp, global_seqno, input_iter, stats,
-                                 block_contents_pinned,
-                                 user_defined_timestamps_persisted);
-}
-
 void BlockCreateContext::Create(std::unique_ptr<Block_kData>* parsed_out,
-                                BlockContents&& block) {
+                                BlockContents&& block_content) {
   // Check if user-defined block factory is present and supports custom format
   if (table_options->user_defined_block_factory != nullptr &&
       table_options->user_defined_block_factory->UsesCustomBlockFormat()) {
     // Use the user-defined block factory to create a custom block
-    std::unique_ptr<UserDefinedBlock> custom_block;
+    std::unique_ptr<UserDefinedBlock> user_defined_block;
     UserDefinedBlockOption option;
     option.comparator = raw_ucmp;
 
     Status s = table_options->user_defined_block_factory->NewBlock(
-        option, &custom_block);
+        option, &user_defined_block);
 
     auto udb_wrapper = std::make_unique<UserDefinedBlockWrapper>(
-        std::move(custom_block), std::move(block),
+        std::move(user_defined_block), std::move(block_content),
         table_options->read_amp_bytes_per_bit, statistics);
     s = udb_wrapper->InitBlock();
 
@@ -65,8 +37,9 @@ void BlockCreateContext::Create(std::unique_ptr<Block_kData>* parsed_out,
   }
 
   // Standard RocksDB block format
-  parsed_out->reset(new Block_kData(
-      std::move(block), table_options->read_amp_bytes_per_bit, statistics));
+  parsed_out->reset(new Block_kData(std::move(block_content),
+                                    table_options->read_amp_bytes_per_bit,
+                                    statistics));
   parsed_out->get()->InitializeDataBlockProtectionInfo(protection_bytes_per_key,
                                                        raw_ucmp);
 }
