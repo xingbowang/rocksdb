@@ -1199,6 +1199,7 @@ TEST_F(UserDefinedBlockTest, DBReadWriteFlush) {
     fprintf(stderr, "All DB tests passed!\n");
   }
 }
+
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
