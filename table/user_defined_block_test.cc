@@ -74,21 +74,14 @@ class UserDefinedBlockTestBase : public testing::Test {
    public:
     PAXBlockIterator() : current_minipage_idx_(0), current_record_idx_(0) {}
 
-    void Initialize(const Comparator* raw_ucmp, const char* data,
-                    uint32_t /*restarts*/, uint32_t /*num_restarts*/,
-                    SequenceNumber /*global_seqno*/,
-                    BlockReadAmpBitmap* /*read_amp_bitmap*/,
-                    bool /*block_contents_pinned*/,
-                    bool /*user_defined_timestamps_persisted*/,
-                    DataBlockHashIndex* /*data_block_hash_index*/,
-                    uint8_t /*protection_bytes_per_key*/,
-                    const char* /*kv_checksum*/,
-                    uint32_t /*block_restart_interval*/) override {
+    void Init(void* user_defined_block_iterator_arg, const Comparator* raw_ucmp,
+              const char* data) {
       // Now override with PAX-specific initialization
+      user_defined_block_iterator_arg_ = user_defined_block_iterator_arg;
+      // make the updateKey assert pass
+      global_seqno_ = kDisableGlobalSequenceNumber;
       comparator_ = raw_ucmp;
       data_ = data;
-      global_seqno_ = kDisableGlobalSequenceNumber;
-      status_ = Status::OK();
       ParsePAXBlock();
       SeekToFirstImpl();
     }
@@ -260,6 +253,7 @@ class UserDefinedBlockTestBase : public testing::Test {
       raw_key_.SetKey(key_, false);
     }
 
+    void* user_defined_block_iterator_arg_;
     const Comparator* comparator_;
     std::vector<std::pair<Slice, Slice>> records_;
     uint32_t current_minipage_idx_;
@@ -420,11 +414,11 @@ class UserDefinedBlockTestBase : public testing::Test {
     bool own_bytes() const override { return contents_->own_bytes(); }
 
     DataBlockIter* NewDataIterator(
-        const Comparator* raw_ucmp, SequenceNumber global_seqno,
-        DataBlockIter* input_iter = nullptr, Statistics* stats = nullptr,
-        bool block_contents_pinned = false,
-        bool user_defined_timestamps_persisted = true) override {
-      (void)stats;
+        const Comparator* raw_ucmp, SequenceNumber /*global_seqno*/,
+        DataBlockIter* input_iter, Statistics* /*stats*/,
+        bool /*block_contents_pinned*/,
+        bool /*user_defined_timestamps_persisted*/,
+        void* user_defined_block_iterator_arg) override {
       PAXBlockIterator* iter = nullptr;
       if (input_iter != nullptr) {
         // Reuse existing iterator if provided
@@ -436,10 +430,8 @@ class UserDefinedBlockTestBase : public testing::Test {
       }
 
       // Initialize the iterator with block data
-      iter->Initialize(raw_ucmp, contents_->data.data(), 0, 0, global_seqno,
-                       nullptr, block_contents_pinned,
-                       user_defined_timestamps_persisted, nullptr, 0, nullptr,
-                       1);
+      iter->Init(user_defined_block_iterator_arg, raw_ucmp,
+                 contents_->data.data());
 
       return iter;
     }
@@ -622,8 +614,7 @@ TEST_F(UserDefinedBlockTest, PAXBlockBuilderAndIteratorTest) {
 
   // Create PAX iterator
   PAXBlockIterator* iter = new PAXBlockIterator();
-  iter->Initialize(BytewiseComparator(), block_copy.data(), 0, 0, 0, nullptr,
-                   true, true, nullptr, 0, nullptr, 1);
+  iter->Init({}, BytewiseComparator(), block_copy.data());
 
   // Test SeekToFirst
   iter->SeekToFirst();
@@ -684,8 +675,7 @@ TEST_F(UserDefinedBlockTest, PAXBlockEmptyValues) {
   std::string block_copy(block_data.data(), block_data.size());
 
   PAXBlockIterator* iter = new PAXBlockIterator();
-  iter->Initialize(BytewiseComparator(), block_copy.data(), 0, 0, 0, nullptr,
-                   true, true, nullptr, 0, nullptr, 1);
+  iter->Init({}, BytewiseComparator(), block_copy.data());
 
   int count = 0;
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
@@ -711,8 +701,7 @@ TEST_F(UserDefinedBlockTest, PAXBlockLargeValues) {
   std::string block_copy(block_data.data(), block_data.size());
 
   PAXBlockIterator* iter = new PAXBlockIterator();
-  iter->Initialize(BytewiseComparator(), block_copy.data(), 0, 0, 0, nullptr,
-                   true, true, nullptr, 0, nullptr, 1);
+  iter->Init({}, BytewiseComparator(), block_copy.data());
 
   int count = 0;
   for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {

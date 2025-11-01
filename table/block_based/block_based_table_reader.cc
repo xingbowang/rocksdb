@@ -1739,37 +1739,23 @@ InternalIteratorBase<IndexValue>* BlockBasedTable::NewIndexIterator(
 // TODO?
 template <>
 DataBlockIter* BlockBasedTable::InitBlockIterator<DataBlockIter>(
-    const Rep* rep, Block* block, BlockType block_type,
-    DataBlockIter* input_iter, bool block_contents_pinned) {
-  // // Check if this is a user-defined block with custom format
-  // // Block_kUserDefinedData* is polymorphically stored as Block_kData*
-  // if (rep->table_options.user_defined_block_factory != nullptr &&
-  //     rep->table_options.user_defined_block_factory->UsesCustomBlockFormat()
-  //     && block_type == BlockType::kData) {
-  //   // Cast to Block_kUserDefinedData to access the custom block interface
-  //   // This is safe because BlockCreateContext::Create() ensures that when
-  //   // UsesCustomBlockFormat() is true, it creates Block_kUserDefinedData
-  //   auto* user_defined_block = dynamic_cast<UserDefinedBlockWrapper>(block);
-
-  //   // Delegate to the user-defined block implementation
-  //   return user_defined_block->NewDataIterator(
-  //       rep->internal_comparator.user_comparator(),
-  //       rep->get_global_seqno(block_type), input_iter, rep->ioptions.stats,
-  //       block_contents_pinned, rep->user_defined_timestamps_persisted);
-  // }
-
+    ReadOptions read_options, const Rep* rep, Block* block,
+    BlockType block_type, DataBlockIter* input_iter,
+    bool block_contents_pinned) {
   // Standard RocksDB block format
   return block->NewDataIterator(rep->internal_comparator.user_comparator(),
                                 rep->get_global_seqno(block_type), input_iter,
                                 rep->ioptions.stats, block_contents_pinned,
-                                rep->user_defined_timestamps_persisted);
+                                rep->user_defined_timestamps_persisted,
+                                read_options.user_defined_block_iterator_arg);
 }
 
 // TODO?
 template <>
 IndexBlockIter* BlockBasedTable::InitBlockIterator<IndexBlockIter>(
-    const Rep* rep, Block* block, BlockType block_type,
-    IndexBlockIter* input_iter, bool block_contents_pinned) {
+    ReadOptions /*read_options*/, const Rep* rep, Block* block,
+    BlockType block_type, IndexBlockIter* input_iter,
+    bool block_contents_pinned) {
   return block->NewIndexIterator(
       rep->internal_comparator.user_comparator(),
       rep->get_global_seqno(block_type), input_iter, rep->ioptions.stats,

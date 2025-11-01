@@ -1254,11 +1254,11 @@ MetaBlockIter* Block::NewMetaIterator(bool block_contents_pinned) {
   return iter;
 }
 
-DataBlockIter* Block::NewDataIterator(const Comparator* raw_ucmp,
-                                      SequenceNumber global_seqno,
-                                      DataBlockIter* iter, Statistics* stats,
-                                      bool block_contents_pinned,
-                                      bool user_defined_timestamps_persisted) {
+DataBlockIter* Block::NewDataIterator(
+    const Comparator* raw_ucmp, SequenceNumber global_seqno,
+    DataBlockIter* iter, Statistics* stats, bool block_contents_pinned,
+    bool user_defined_timestamps_persisted,
+    void* /*user_defined_block_iterator_arg*/) {
   DataBlockIter* ret_iter;
   if (iter != nullptr) {
     ret_iter = iter;

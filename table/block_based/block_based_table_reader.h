@@ -376,8 +376,8 @@ class BlockBasedTable : public TableReader {
 
   // Either Block::NewDataIterator() or Block::NewIndexIterator().
   template <typename TBlockIter>
-  static TBlockIter* InitBlockIterator(const Rep* rep, Block* block,
-                                       BlockType block_type,
+  static TBlockIter* InitBlockIterator(ReadOptions read_options, const Rep* rep,
+                                       Block* block, BlockType block_type,
                                        TBlockIter* input_iter,
                                        bool block_contents_pinned);
 

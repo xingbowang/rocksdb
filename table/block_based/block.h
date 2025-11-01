@@ -199,7 +199,8 @@ class Block {
       const Comparator* raw_ucmp, SequenceNumber global_seqno,
       DataBlockIter* iter = nullptr, Statistics* stats = nullptr,
       bool block_contents_pinned = false,
-      bool user_defined_timestamps_persisted = true);
+      bool user_defined_timestamps_persisted = true,
+      void* user_defined_block_iterator_arg = nullptr);
 
   // Returns an MetaBlockIter for iterating over blocks containing metadata
   // (like Properties blocks).  Unlike data blocks, the keys for these blocks

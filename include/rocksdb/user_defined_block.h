@@ -106,7 +106,8 @@ class UserDefinedBlock {
       const Comparator* raw_ucmp, SequenceNumber global_seqno,
       DataBlockIter* input_iter = nullptr, Statistics* stats = nullptr,
       bool block_contents_pinned = false,
-      bool user_defined_timestamps_persisted = true) = 0;
+      bool user_defined_timestamps_persisted = true,
+      void* user_defined_block_iterator_arg = nullptr) = 0;
 };
 
 // ============================================================================

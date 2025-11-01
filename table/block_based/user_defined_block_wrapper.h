@@ -48,12 +48,12 @@ class UserDefinedBlockWrapper : public Block_kData {
 
   DataBlockIter* NewDataIterator(
       const Comparator* raw_ucmp, SequenceNumber global_seqno,
-      DataBlockIter* input_iter = nullptr, Statistics* stats = nullptr,
-      bool block_contents_pinned = false,
-      bool user_defined_timestamps_persisted = true) override {
-    return block_->NewDataIterator(raw_ucmp, global_seqno, input_iter, stats,
-                                   block_contents_pinned,
-                                   user_defined_timestamps_persisted);
+      DataBlockIter* input_iter, Statistics* stats, bool block_contents_pinned,
+      bool user_defined_timestamps_persisted,
+      void* user_defined_block_iterator_arg) override {
+    return block_->NewDataIterator(
+        raw_ucmp, global_seqno, input_iter, stats, block_contents_pinned,
+        user_defined_timestamps_persisted, user_defined_block_iterator_arg);
   }
 
   std::unique_ptr<UserDefinedBlock> block_;
