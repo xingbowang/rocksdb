@@ -1462,7 +1462,7 @@ if(WITH_TESTS)
         table/sst_file_reader_test.cc
         table/table_test.cc
         table/user_defined_block_test.cc
-        table/user_defined_block_test2.cc
+        table/rexdb_test.cc
         table/block_fetcher_test.cc
         test_util/testutil_test.cc
         trace_replay/block_cache_tracer_test.cc
