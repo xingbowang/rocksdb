@@ -348,11 +348,11 @@ class BlockBasedTable : public TableReader {
       const BlockHandle& block_handle, GetContext* get_context,
       BlockCacheLookupContext* lookup_data_block_context,
       FilePrefetchBuffer* prefetch_buffer, bool for_compaction, bool async_read,
-      Status& s, bool use_block_cache_for_lookup) const;
+      bool use_block_cache_for_lookup) const;
 
   Status CreateDataBlockIterator(const ReadOptions& read_options,
                                  CachableEntry<Block>& block,
-                                 DataBlockIter** biter, Status s) const;
+                                 DataBlockIter** biter) const;
 
  protected:
   Rep* rep_;
@@ -367,7 +367,8 @@ class BlockBasedTable : public TableReader {
   friend class BlockBasedTableReaderTestVerifyChecksum_ChecksumMismatch_Test;
   BlockCacheTracer* const block_cache_tracer_;
 
-  Status TryInitUserDefinedBlockIterator(DataBlockIter** biter) const;
+  void CreateUserDefinedBlockIteratorIfEnabled(DataBlockIter** biter,
+                                               Status& s) const;
 
   void UpdateCacheHitMetrics(BlockType block_type, GetContext* get_context,
                              size_t usage) const;

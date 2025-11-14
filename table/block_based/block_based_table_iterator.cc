@@ -387,7 +387,7 @@ void BlockBasedTableIterator::InitDataBlock() {
       block_iter_->Invalidate(Status::OK());
       table_->CreateDataBlockIterator(
           read_options_, (block_handles_->front().cachable_entry_).As<Block>(),
-          &block_iter_, s);
+          &block_iter_);
     } else {
       auto* rep = table_->get_rep();
 
@@ -412,12 +412,11 @@ void BlockBasedTableIterator::InitDataBlock() {
           /*no_sequential_checking=*/false, read_options_, readaheadsize_cb,
           read_options_.async_io);
 
-      Status s;
       table_->CreateDataBlockIterator(
           &block_iter_, read_options_, data_block_handle,
           /*get_context=*/nullptr, &lookup_context_,
           block_prefetcher_.prefetch_buffer(), is_for_compaction,
-          /*async_read=*/false, s, use_block_cache_for_lookup);
+          /*async_read=*/false, use_block_cache_for_lookup);
     }
     block_iter_points_to_real_block_ = true;
 
@@ -471,12 +470,11 @@ void BlockBasedTableIterator::AsyncInitDataBlock(bool is_first_pass) {
           is_for_compaction, /*no_sequential_checking=*/read_options_.async_io,
           read_options_, readaheadsize_cb, read_options_.async_io);
 
-      Status s;
-      table_->CreateDataBlockIterator(
+      Status s = table_->CreateDataBlockIterator(
           &block_iter_, read_options_, data_block_handle,
           /*get_context=*/nullptr, &lookup_context_,
           block_prefetcher_.prefetch_buffer(),
-          /*for_compaction=*/is_for_compaction, /*async_read=*/true, s,
+          /*for_compaction=*/is_for_compaction, /*async_read=*/true,
           /*use_block_cache_for_lookup=*/true);
 
       if (s.IsTryAgain()) {
@@ -496,19 +494,18 @@ void BlockBasedTableIterator::AsyncInitDataBlock(bool is_first_pass) {
       data_block_handle = index_iter_->value().handle;
     }
 
-    Status s;
     // Initialize Data Block From CacheableEntry.
     if (is_in_cache) {
       block_iter_->Invalidate(Status::OK());
       table_->CreateDataBlockIterator(
           read_options_, (block_handles_->front().cachable_entry_).As<Block>(),
-          &block_iter_, s);
+          &block_iter_);
     } else {
       table_->CreateDataBlockIterator(
           &block_iter_, read_options_, data_block_handle,
           /*get_context=*/nullptr, &lookup_context_,
           block_prefetcher_.prefetch_buffer(), is_for_compaction,
-          /*async_read=*/false, s,
+          /*async_read=*/false,
           /*use_block_cache_for_lookup=*/false);
     }
   }

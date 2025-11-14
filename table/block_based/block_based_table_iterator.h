@@ -695,9 +695,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     // Note that the block_iter_ takes ownership of the pinned data block
     // TODO: we can delegate the clean up like with pinned_iters_mgr_ if
     // need to pin blocks longer.
-    table_->CreateDataBlockIterator(read_options_,
-                                    multi_scan_->pinned_data_blocks[idx],
-                                    &block_iter_, Status::OK());
+    table_->CreateDataBlockIterator(
+        read_options_, multi_scan_->pinned_data_blocks[idx], &block_iter_);
     return false;
   }
 

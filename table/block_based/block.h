@@ -707,6 +707,10 @@ class DataBlockIter : public BlockIter<Slice> {
     data_block_hash_index_ = data_block_hash_index;
   }
 
+  virtual DataBlockIteratorType Type() const {
+    return DataBlockIteratorType::kDefaultDataBlockIter;
+  }
+
   Slice value() const override {
     assert(Valid());
     if (read_amp_bitmap_ && current_ < restarts_ &&

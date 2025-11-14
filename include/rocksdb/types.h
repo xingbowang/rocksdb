@@ -127,4 +127,9 @@ enum class Temperature : uint8_t {
   kLastTemperature,
 };
 
+enum class DataBlockIteratorType : uint8_t {
+  kDefaultDataBlockIter,
+  kUserDefinedDataBlockIter,
+};
+
 }  // namespace ROCKSDB_NAMESPACE

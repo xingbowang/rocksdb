@@ -129,6 +129,10 @@ class UserDefinedBlockFactory : public Customizable {
 
   static const char* Type() { return "UserDefinedBlockFactory"; }
 
+  DataBlockIteratorType IteratorType() const {
+    return DataBlockIteratorType::kUserDefinedDataBlockIter;
+  }
+
   static Status CreateFromString(
       const ConfigOptions& config_options, const std::string& value,
       std::shared_ptr<UserDefinedBlockFactory>* factory);
