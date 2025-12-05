@@ -25,6 +25,7 @@
 #include "rocksdb/flush_block_policy.h"
 #include "rocksdb/rocksdb_namespace.h"
 #include "rocksdb/table.h"
+#include "rocksdb/user_defined_block.h"
 #include "rocksdb/user_defined_index.h"
 #include "rocksdb/utilities/customizable_util.h"
 #include "rocksdb/utilities/options_type.h"
@@ -318,6 +319,11 @@ static struct BlockBasedTableTypeInfo {
          OptionTypeInfo::AsCustomSharedPtr<UserDefinedIndexFactory>(
              offsetof(struct BlockBasedTableOptions,
                       user_defined_index_factory),
+             OptionVerificationType::kByNameAllowFromNull)},
+        {"user_defined_block_factory",
+         OptionTypeInfo::AsCustomSharedPtr<UserDefinedBlockFactory>(
+             offsetof(struct BlockBasedTableOptions,
+                      user_defined_block_factory),
              OptionVerificationType::kByNameAllowFromNull)},
         {"whole_key_filtering",
          {offsetof(struct BlockBasedTableOptions, whole_key_filtering),
@@ -904,6 +910,11 @@ std::string BlockBasedTableFactory::GetPrintableOptions() const {
            table_options_.user_defined_index_factory == nullptr
                ? "nullptr"
                : table_options_.user_defined_index_factory->Name());
+  ret.append(buffer);
+  snprintf(buffer, kBufferSize, "  user_defined_block_factory: %s\n",
+           table_options_.user_defined_block_factory == nullptr
+               ? "nullptr"
+               : table_options_.user_defined_block_factory->Name());
   ret.append(buffer);
   snprintf(buffer, kBufferSize, "  fail_if_no_udi_on_open: %d\n",
            table_options_.fail_if_no_udi_on_open);

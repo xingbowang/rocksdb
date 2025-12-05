@@ -510,6 +510,11 @@ struct BlockBasedTableOptions {
   // (CompressionOptions::parallel_threads sanitized to 1).
   std::shared_ptr<UserDefinedIndexFactory> user_defined_index_factory = nullptr;
 
+  // EXPERIMENTAL
+  //
+  // If non-nullptr, use the specified factory to build user-defined block.
+  // This allows users to define their own block format. It enables customized
+  // block building, block reading and iterating logic.
   std::shared_ptr<UserDefinedBlockFactory> user_defined_block_factory = nullptr;
 
   // EXPERIMENTAL

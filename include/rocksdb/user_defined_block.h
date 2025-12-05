@@ -17,6 +17,7 @@
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
+#include "rocksdb/utilities/customizable_util.h"
 #include "table/block_based/block_builder.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -135,7 +136,10 @@ class UserDefinedBlockFactory : public Customizable {
 
   static Status CreateFromString(
       const ConfigOptions& config_options, const std::string& value,
-      std::shared_ptr<UserDefinedBlockFactory>* factory);
+      std::shared_ptr<UserDefinedBlockFactory>* factory) {
+    return LoadSharedObject<UserDefinedBlockFactory>(config_options, value,
+                                                     factory);
+  }
 
   // -------------------------------------------------------------------------
   // WRITE PATH: Creating block builders
