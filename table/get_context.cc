@@ -5,11 +5,15 @@
 
 #include "table/get_context.h"
 
-#include "db/blob//blob_fetcher.h"
+#include <vector>
+
+#include "db/blob/blob_fetcher.h"
+#include "db/blob/blob_index.h"
 #include "db/merge_helper.h"
 #include "db/pinned_iterators_manager.h"
 #include "db/read_callback.h"
 #include "db/wide/wide_column_serialization.h"
+#include "db/wide/wide_columns_helper.h"
 #include "monitoring/file_read_sample.h"
 #include "monitoring/perf_context_imp.h"
 #include "monitoring/statistics_impl.h"
@@ -320,31 +324,78 @@ bool GetContext::SaveValue(const ParsedInternalKey& parsed_key,
               Slice value_to_use = unpacked_value;
 
               if (type == kTypeWideColumnEntity) {
-                Slice value_copy = unpacked_value;
-
-                if (!WideColumnSerialization::GetValueOfDefaultColumn(
-                         value_copy, value_to_use)
-                         .ok()) {
-                  state_ = kCorrupt;
-                  return false;
+                if (WideColumnSerialization::HasBlobColumns(unpacked_value)) {
+                  Status s = WideColumnSerialization::
+                      GetDefaultColumnFromEntityResolvingBlobs(
+                          unpacked_value, parsed_key.user_key, blob_fetcher_,
+                          pinnable_val_);
+                  if (!s.ok()) {
+                    state_ = kCorrupt;
+                    return false;
+                  }
+                } else {
+                  // No blob columns, use the simple path
+                  Slice value_copy = unpacked_value;
+                  if (!WideColumnSerialization::GetValueOfDefaultColumn(
+                           value_copy, value_to_use)
+                           .ok()) {
+                    state_ = kCorrupt;
+                    return false;
+                  }
+                  if (LIKELY(value_pinner != nullptr)) {
+                    pinnable_val_->PinSlice(value_to_use, value_pinner);
+                  } else {
+                    pinnable_val_->PinSelf(value_to_use);
+                  }
                 }
-              }
-
-              if (LIKELY(value_pinner != nullptr)) {
-                // If the backing resources for the value are provided, pin them
-                pinnable_val_->PinSlice(value_to_use, value_pinner);
               } else {
-                TEST_SYNC_POINT_CALLBACK("GetContext::SaveValue::PinSelf",
-                                         this);
-                // Otherwise copy the value
-                pinnable_val_->PinSelf(value_to_use);
+                // Non-entity type
+                if (LIKELY(value_pinner != nullptr)) {
+                  // If the backing resources for the value are provided, pin
+                  // them
+                  pinnable_val_->PinSlice(value_to_use, value_pinner);
+                } else {
+                  TEST_SYNC_POINT_CALLBACK("GetContext::SaveValue::PinSelf",
+                                           this);
+                  // Otherwise copy the value
+                  pinnable_val_->PinSelf(value_to_use);
+                }
               }
             } else if (columns_ != nullptr) {
               if (type == kTypeWideColumnEntity) {
-                if (!columns_->SetWideColumnValue(unpacked_value, value_pinner)
-                         .ok()) {
-                  state_ = kCorrupt;
-                  return false;
+                // Check if entity has blob columns that need resolution
+                if (WideColumnSerialization::HasBlobColumns(unpacked_value)) {
+                  // TODO: Add lazy resolution support for GetEntity point
+                  // lookups. This requires SuperVersion pinning on
+                  // PinnableWideColumns to keep the Version* alive after
+                  // GetImpl returns. Currently, lazy_column_resolution only
+                  // takes effect for iterators (DBIter path).
+
+                  // Eager path: resolve all blob columns immediately
+                  std::string resolved_entity;
+                  Status s = WideColumnSerialization::ResolveEntityBlobColumns(
+                      unpacked_value, parsed_key.user_key, blob_fetcher_,
+                      nullptr /* prefetch_buffers */, &resolved_entity,
+                      nullptr /* total_bytes_read */,
+                      nullptr /* num_blobs_resolved */);
+                  if (!s.ok()) {
+                    state_ = kCorrupt;
+                    return false;
+                  }
+
+                  s = columns_->SetWideColumnValue(std::move(resolved_entity));
+                  if (!s.ok()) {
+                    state_ = kCorrupt;
+                    return false;
+                  }
+                } else {
+                  // No blob columns, use fast path
+                  if (!columns_
+                           ->SetWideColumnValue(unpacked_value, value_pinner)
+                           .ok()) {
+                    state_ = kCorrupt;
+                    return false;
+                  }
                 }
               } else {
                 columns_->SetPlainValue(unpacked_value, value_pinner);
@@ -535,6 +586,32 @@ void GetContext::MergeWithWideColumnBaseValue(const Slice& entity) {
   assert(do_merge_);
   assert(pinnable_val_ || columns_);
   assert(!pinnable_val_ || !columns_);
+
+  // If the entity has blob columns (V2 format), we need to resolve them first.
+  // TimedFullMerge calls WideColumnSerialization::Deserialize(), which only
+  // supports V1 format. We resolve blob references to produce a V1 entity.
+  if (WideColumnSerialization::HasBlobColumns(entity)) {
+    std::string resolved_entity;
+    const Status s = WideColumnSerialization::ResolveEntityBlobColumns(
+        entity, user_key_, blob_fetcher_, nullptr /* prefetch_buffers */,
+        &resolved_entity, nullptr /* total_bytes_read */,
+        nullptr /* num_blobs_resolved */);
+    if (!s.ok()) {
+      state_ = kCorrupt;
+      return;
+    }
+
+    // `op_failure_scope` (an output parameter) is not provided (set to nullptr)
+    // since a failure must be propagated regardless of its value.
+    const Status s2 = MergeHelper::TimedFullMerge(
+        merge_operator_, user_key_, MergeHelper::kWideBaseValue,
+        Slice(resolved_entity), merge_context_->GetOperands(), logger_,
+        statistics_, clock_,
+        /* update_num_ops_stats */ true, /* op_failure_scope */ nullptr,
+        pinnable_val_ ? pinnable_val_->GetSelf() : nullptr, columns_);
+    PostprocessMerge(s2);
+    return;
+  }
 
   // `op_failure_scope` (an output parameter) is not provided (set to nullptr)
   // since a failure must be propagated regardless of its value.

@@ -11,6 +11,7 @@
 
 #include "db/blob/blob_index.h"
 #include "db/version_set.h"
+#include "db/wide/wide_column_serialization.h"
 #include "logging/event_logger.h"
 #include "rocksdb/slice.h"
 #include "table/unique_id_impl.h"
@@ -45,6 +46,36 @@ Status FileMetaData::UpdateBoundaries(const Slice& key, const Slice& value,
       if (oldest_blob_file_number == kInvalidBlobFileNumber ||
           oldest_blob_file_number > blob_index.file_number()) {
         oldest_blob_file_number = blob_index.file_number();
+      }
+    }
+  } else if (value_type == kTypeWideColumnEntity) {
+    // Only V2 entities can contain blob column references. HasBlobColumns()
+    // is a lightweight check that reads the version byte and scans the column
+    // type bytes without full deserialization, so this is cheap on the hot
+    // path for V1 entities.
+    if (WideColumnSerialization::HasBlobColumns(value)) {
+      Slice input = value;
+      std::vector<WideColumn> columns;
+      std::vector<std::pair<size_t, BlobIndex>> blob_columns;
+      Status s = WideColumnSerialization::DeserializeColumns(input, &columns,
+                                                             &blob_columns);
+      if (!s.ok()) {
+        return s;
+      }
+
+      // Update oldest_blob_file_number for each blob column
+      for (const auto& blob_col : blob_columns) {
+        const BlobIndex& blob_index = blob_col.second;
+        if (!blob_index.IsInlined() && !blob_index.HasTTL()) {
+          if (blob_index.file_number() == kInvalidBlobFileNumber) {
+            return Status::Corruption("Invalid blob file number in entity");
+          }
+
+          if (oldest_blob_file_number == kInvalidBlobFileNumber ||
+              oldest_blob_file_number > blob_index.file_number()) {
+            oldest_blob_file_number = blob_index.file_number();
+          }
+        }
       }
     }
   }

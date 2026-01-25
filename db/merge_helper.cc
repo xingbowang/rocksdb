@@ -438,11 +438,45 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
                            &op_failure_scope, &merge_result,
                            /* result_operand */ nullptr, &merge_result_type);
       } else if (ikey.type == kTypeWideColumnEntity) {
-        s = TimedFullMerge(user_merge_operator_, ikey.user_key, kWideBaseValue,
-                           iter->value(), merge_context_.GetOperands(), logger_,
-                           stats_, clock_, /* update_num_ops_stats */ false,
-                           &op_failure_scope, &merge_result,
-                           /* result_operand */ nullptr, &merge_result_type);
+        Slice entity_value = iter->value();
+
+        // Check if entity has blob columns that need to be resolved
+        if (WideColumnSerialization::HasBlobColumns(entity_value)) {
+          // Entity has blob columns - resolve them before merging
+          std::string resolved_entity;
+          uint64_t bytes_read = 0;
+          uint64_t blobs_resolved = 0;
+
+          assert(blob_fetcher);
+
+          s = WideColumnSerialization::ResolveEntityBlobColumns(
+              entity_value, ikey.user_key, blob_fetcher, prefetch_buffers,
+              &resolved_entity, &bytes_read, &blobs_resolved);
+          if (!s.ok()) {
+            return s;
+          }
+
+          if (c_iter_stats) {
+            c_iter_stats->num_blobs_read += blobs_resolved;
+            c_iter_stats->total_blob_bytes_read += bytes_read;
+          }
+
+          // Now merge with the resolved entity
+          s = TimedFullMerge(user_merge_operator_, ikey.user_key,
+                             kWideBaseValue, Slice(resolved_entity),
+                             merge_context_.GetOperands(), logger_, stats_,
+                             clock_, /* update_num_ops_stats */ false,
+                             &op_failure_scope, &merge_result,
+                             /* result_operand */ nullptr, &merge_result_type);
+        } else {
+          // No blob columns, use the entity value directly
+          s = TimedFullMerge(
+              user_merge_operator_, ikey.user_key, kWideBaseValue, entity_value,
+              merge_context_.GetOperands(), logger_, stats_, clock_,
+              /* update_num_ops_stats */ false, &op_failure_scope,
+              &merge_result,
+              /* result_operand */ nullptr, &merge_result_type);
+        }
       } else {
         s = TimedFullMerge(user_merge_operator_, ikey.user_key, kNoBaseValue,
                            merge_context_.GetOperands(), logger_, stats_,
@@ -676,15 +710,16 @@ CompactionFilter::Decision MergeHelper::FilterMerge(const Slice& user_key,
   }
   compaction_filter_value_.clear();
   compaction_filter_skip_until_.Clear();
-  auto ret = compaction_filter_->FilterV3(
+  auto ret = compaction_filter_->FilterV4(
       level_, user_key, CompactionFilter::ValueType::kMergeOperand,
       &value_slice, /* existing_columns */ nullptr, &compaction_filter_value_,
-      /* new_columns */ nullptr, compaction_filter_skip_until_.rep());
+      /* new_columns */ nullptr, compaction_filter_skip_until_.rep(),
+      /* blob_resolver */ nullptr);
   if (ret == CompactionFilter::Decision::kRemoveAndSkipUntil) {
     if (user_comparator_->Compare(*compaction_filter_skip_until_.rep(),
                                   user_key) <= 0) {
       // Invalid skip_until returned from compaction filter.
-      // Keep the key as per FilterV2/FilterV3 documentation.
+      // Keep the key as per FilterV2/V3/V4 documentation.
       ret = CompactionFilter::Decision::kKeep;
     } else {
       compaction_filter_skip_until_.ConvertFromUserKey(kMaxSequenceNumber,
