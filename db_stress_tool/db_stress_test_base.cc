@@ -4348,6 +4348,8 @@ void InitializeOptionsFromFlags(
       fLU64::FLAGS_super_block_alignment_size;
   block_based_options.super_block_alignment_space_overhead_ratio =
       fLU64::FLAGS_super_block_alignment_space_overhead_ratio;
+  block_based_options.pin_entire_sst_max_size =
+      fLU64::FLAGS_pin_entire_sst_max_size;
   options.table_factory.reset(NewBlockBasedTableFactory(block_based_options));
   options.db_write_buffer_size = FLAGS_db_write_buffer_size;
   options.write_buffer_size = FLAGS_write_buffer_size;

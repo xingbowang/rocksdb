@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -1308,6 +1309,19 @@ Status BlockBasedTable::PrefetchIndexAndFilterBlocks(
                     ? PinningTier::kFlushedAndSimilar
                     : PinningTier::kNone);
 
+  // Determine if data blocks should be pinned for this SST
+  const bool pin_data_blocks =
+      is_pinned(table_options.metadata_cache_options.data_blocks_pinning,
+                PinningTier::kNone);
+  // Check if entire SST should have all data blocks pinned
+  // Conditions: data_blocks_pinning is enabled, file size is under threshold,
+  // and block cache is available
+  rep_->entire_sst_pinned =
+      pin_data_blocks &&
+      table_options.pin_entire_sst_max_size > 0 &&
+      file_size <= table_options.pin_entire_sst_max_size &&
+      table_options.block_cache != nullptr;
+
   // pin the first level of index
   const bool pin_index =
       index_type == BlockBasedTableOptions::kTwoLevelIndexSearch
@@ -1443,8 +1457,75 @@ Status BlockBasedTable::PrefetchIndexAndFilterBlocks(
     rep_->uncompression_dict_reader = std::move(uncompression_dict_reader);
   }
 
+  // Prefetch and pin all data blocks if entire SST pinning is enabled
+  if (s.ok() && rep_->entire_sst_pinned) {
+    s = new_table->PrefetchAndPinAllDataBlocks(ro, prefetch_buffer);
+    if (!s.ok()) {
+      // If pinning fails, fall back to normal caching behavior
+      rep_->entire_sst_pinned = false;
+      rep_->pinned_data_blocks.clear();
+      s = Status::OK();  // Don't fail table open due to pinning failure
+    }
+  }
+
   assert(s.ok());
   return s;
+}
+
+Status BlockBasedTable::PrefetchAndPinAllDataBlocks(
+    const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer) {
+  assert(rep_->entire_sst_pinned);
+  assert(rep_->index_reader != nullptr);
+
+  // Create an iterator over the index to enumerate all data block handles
+  IndexBlockIter iiter_on_stack;
+  auto iiter = NewIndexIterator(ro, /*disable_prefix_seek=*/true,
+                                &iiter_on_stack, /*get_context=*/nullptr,
+                                /*lookup_context=*/nullptr);
+  std::unique_ptr<InternalIteratorBase<IndexValue>> iiter_unique_ptr;
+  if (iiter != &iiter_on_stack) {
+    iiter_unique_ptr.reset(iiter);
+  }
+
+  Status s;
+  size_t total_pinned_size = 0;
+
+  // Iterate over all data blocks and pin them
+  for (iiter->SeekToFirst(); iiter->Valid(); iiter->Next()) {
+    BlockHandle handle = iiter->value().handle;
+    CachableEntry<Block_kData> block_entry;
+
+    // Use RetrieveBlock to load the block into cache
+    s = RetrieveBlock<Block_kData>(
+        prefetch_buffer, ro, handle, rep_->decompressor.get(), &block_entry,
+        /*get_context=*/nullptr, /*lookup_context=*/nullptr,
+        /*for_compaction=*/false, /*use_cache=*/true, /*async_read=*/false,
+        /*use_block_cache_for_lookup=*/true);
+
+    if (!s.ok()) {
+      return s;
+    }
+
+    // Store in pinned_data_blocks map if successfully cached
+    if (block_entry.IsCached() || block_entry.GetValue() != nullptr) {
+      if (block_entry.GetValue() != nullptr) {
+        total_pinned_size += block_entry.GetValue()->ApproximateMemoryUsage();
+      }
+      rep_->pinned_data_blocks[handle.offset()] = std::move(block_entry);
+    }
+  }
+
+  s = iiter->status();
+  if (!s.ok()) {
+    return s;
+  }
+
+  // The pinned blocks are already in the block cache and will be accounted
+  // there. The CachableEntry destructors in pinned_data_blocks will release
+  // the cache handles when the table is closed.
+  (void)total_pinned_size;  // Silence unused variable warning
+
+  return Status::OK();
 }
 
 void BlockBasedTable::SetupForCompaction() {}
@@ -2097,6 +2178,20 @@ WithBlocklikeCheck<Status, TBlocklike> BlockBasedTable::RetrieveBlock(
     bool use_cache, bool async_read, bool use_block_cache_for_lookup) const {
   assert(out_parsed_block);
   assert(out_parsed_block->IsEmpty());
+
+  // Fast path: check if this data block is pinned in memory
+  if constexpr (std::is_same_v<TBlocklike, Block_kData>) {
+    if (rep_->entire_sst_pinned) {
+      auto it = rep_->pinned_data_blocks.find(handle.offset());
+      if (it != rep_->pinned_data_blocks.end() &&
+          it->second.GetValue() != nullptr) {
+        // Return unowned reference - caller doesn't take ownership
+        out_parsed_block->SetUnownedValue(
+            const_cast<Block_kData*>(it->second.GetValue()));
+        return Status::OK();
+      }
+    }
+  }
 
   Status s;
   if (use_cache) {

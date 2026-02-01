@@ -540,6 +540,11 @@ class BlockBasedTable : public TableReader {
       bool use_cache, bool prefetch, bool pin,
       BlockCacheLookupContext* lookup_context);
 
+  // Prefetch and pin all data blocks in memory for BlobDB optimization.
+  // Called during table Open() when entire_sst_pinned is enabled.
+  Status PrefetchAndPinAllDataBlocks(const ReadOptions& ro,
+                                     FilePrefetchBuffer* prefetch_buffer);
+
   // Size of all data blocks, maybe approximate
   uint64_t GetApproximateDataSize();
 
@@ -722,6 +727,19 @@ struct BlockBasedTable::Rep {
 
   std::unique_ptr<CacheReservationManager::CacheReservationHandle>
       table_reader_cache_res_handle = nullptr;
+
+  // Pinned data blocks when entire SST pinning is enabled.
+  // Key is the block handle offset. This map is populated during table Open()
+  // when data_blocks_pinning is enabled and file size is under threshold.
+  // The map is read-only after initialization, so no locking is needed.
+  std::unordered_map<uint64_t, CachableEntry<Block_kData>> pinned_data_blocks;
+
+  // Whether all data blocks for this SST are pinned in pinned_data_blocks.
+  bool entire_sst_pinned = false;
+
+  // Cache reservation handle for tracking pinned data blocks memory.
+  std::unique_ptr<CacheReservationManager::CacheReservationHandle>
+      pinned_data_blocks_cache_res_handle = nullptr;
 
   CachableEntry<Block_kUserDefinedIndex> udi_block;
 

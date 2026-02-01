@@ -107,6 +107,18 @@ struct MetadataCacheOptions {
   // any effect. Otherwise the unpartitioned meta-blocks would be held in table
   // reader memory, outside the block cache.
   PinningTier unpartitioned_pinning = PinningTier::kFallback;
+
+  // The tier of block-based tables whose data blocks will be pinned in the
+  // block cache. This is useful for BlobDB where SST files contain only keys
+  // and blob references, making them small enough to pin entirely in memory.
+  //
+  // When enabled along with `pin_entire_sst_max_size`, all data blocks from
+  // qualifying SST files will be loaded into the block cache during table
+  // open and kept pinned until the table is closed.
+  //
+  // Note: `cache_index_and_filter_blocks` must be true for this option to have
+  // any effect.
+  PinningTier data_blocks_pinning = PinningTier::kNone;
 };
 
 struct CacheEntryRoleOptions {
@@ -742,6 +754,25 @@ struct BlockBasedTableOptions {
   //
   // Default: 2
   uint64_t num_file_reads_for_auto_readahead = 2;
+
+  // Maximum SST file size for which entire data block pinning is enabled.
+  // When `metadata_cache_options.data_blocks_pinning` is set to a tier other
+  // than `kNone`, SST files smaller than this threshold will have all their
+  // data blocks loaded and pinned in the block cache during table open.
+  //
+  // This is particularly useful for BlobDB configurations where SST files
+  // are small (containing only keys and blob references) and can benefit
+  // from being entirely memory-resident to avoid block cache contention.
+  //
+  // Set to 0 to disable (default). Recommended values for BlobDB: 4MB-16MB.
+  //
+  // Note: This option only takes effect when:
+  // - `cache_index_and_filter_blocks` is true
+  // - `metadata_cache_options.data_blocks_pinning` is not `kNone`
+  // - Block cache is enabled
+  //
+  // Default: 0 (disabled)
+  size_t pin_entire_sst_max_size = 0;
 };
 
 // Table Properties that are specific to block-based table properties.

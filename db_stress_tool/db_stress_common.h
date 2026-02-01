@@ -412,6 +412,7 @@ DECLARE_bool(enable_do_not_compress_roles);
 DECLARE_bool(block_align);
 DECLARE_uint64(super_block_alignment_size);
 DECLARE_uint64(super_block_alignment_space_overhead_ratio);
+DECLARE_uint64(pin_entire_sst_max_size);
 DECLARE_uint32(lowest_used_cache_tier);
 DECLARE_bool(enable_custom_split_merge);
 DECLARE_uint32(adm_policy);

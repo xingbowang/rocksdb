@@ -1444,6 +1444,11 @@ DEFINE_uint64(
         .super_block_alignment_space_overhead_ratio,
     "BlockBasedTableOptions.super_block_alignment_space_overhead_ratio");
 
+DEFINE_uint64(pin_entire_sst_max_size,
+              ROCKSDB_NAMESPACE::BlockBasedTableOptions().pin_entire_sst_max_size,
+              "BlockBasedTableOptions.pin_entire_sst_max_size. Maximum SST file "
+              "size for which entire data block pinning is enabled.");
+
 DEFINE_uint32(
     lowest_used_cache_tier,
     static_cast<uint32_t>(ROCKSDB_NAMESPACE::Options().lowest_used_cache_tier),

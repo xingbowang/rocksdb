@@ -1993,6 +1993,118 @@ INSTANTIATE_TEST_CASE_P(
             .WithCompressionDictByteCounts({0})
             .WithFillCacheFlags({false})
             .build()));
+
+// Test for pin_entire_sst_max_size functionality
+class PinEntireSstTest : public BlockBasedTableReaderBaseTest {
+ public:
+  void SetUp() override {
+    SetupEnv();
+    ConfigureTableFactory();
+  }
+
+  void TearDown() override { TearDownEnv(); }
+
+  void SetupEnv() {
+    env_ = Env::Default();
+    fs_ = env_->GetFileSystem();
+    ASSERT_OK(fs_->CreateDirIfMissing(test_dir_, IOOptions(), nullptr));
+  }
+
+  void TearDownEnv() { ASSERT_OK(DestroyDir(env_, test_dir_)); }
+
+  void ConfigureTableFactory() {
+    Options options;
+    options.table_factory = table_factory_;
+    options_ = options;
+  }
+
+  std::shared_ptr<BlockBasedTableFactory> table_factory_ =
+      std::make_shared<BlockBasedTableFactory>(BlockBasedTableOptions());
+};
+
+TEST_F(PinEntireSstTest, PinEntireSstBasic) {
+  // Create a small SST file that qualifies for pinning
+  BlockBasedTableOptions table_options;
+  table_options.cache_index_and_filter_blocks = true;
+  table_options.block_cache = NewLRUCache(8 * 1024 * 1024);
+  table_options.metadata_cache_options.data_blocks_pinning = PinningTier::kAll;
+  table_options.pin_entire_sst_max_size = 1024 * 1024;  // 1MB threshold
+
+  options_.table_factory.reset(NewBlockBasedTableFactory(table_options));
+  ImmutableOptions ioptions(options_);
+
+  // Generate a small table with a few blocks
+  std::vector<std::pair<std::string, std::string>> kv =
+      GenerateKVMap(5 /* num_block */);
+
+  std::string table_name = "PinEntireSstBasic";
+  CreateTable(table_name, ioptions, kNoCompression, kv);
+
+  // Open the table
+  std::unique_ptr<BlockBasedTable> table;
+  NewBlockBasedTableReader(FileOptions(), ioptions, InternalKeyComparator(BytewiseComparator()),
+                           table_name, &table);
+
+  // Verify the table was pinned (entire_sst_pinned should be true for small files)
+  // The table should have all data blocks in pinned_data_blocks map
+  ASSERT_TRUE(table->get_rep()->entire_sst_pinned);
+  ASSERT_GT(table->get_rep()->pinned_data_blocks.size(), 0);
+}
+
+TEST_F(PinEntireSstTest, PinEntireSstSizeThreshold) {
+  // Create an SST file that exceeds the size threshold
+  BlockBasedTableOptions table_options;
+  table_options.cache_index_and_filter_blocks = true;
+  table_options.block_cache = NewLRUCache(8 * 1024 * 1024);
+  table_options.metadata_cache_options.data_blocks_pinning = PinningTier::kAll;
+  table_options.pin_entire_sst_max_size = 1024;  // Very small threshold (1KB)
+
+  options_.table_factory.reset(NewBlockBasedTableFactory(table_options));
+  ImmutableOptions ioptions(options_);
+
+  // Generate a table that will exceed 1KB
+  std::vector<std::pair<std::string, std::string>> kv =
+      GenerateKVMap(10 /* num_block */);
+
+  std::string table_name = "PinEntireSstSizeThreshold";
+  CreateTable(table_name, ioptions, kNoCompression, kv);
+
+  // Open the table
+  std::unique_ptr<BlockBasedTable> table;
+  NewBlockBasedTableReader(FileOptions(), ioptions, InternalKeyComparator(BytewiseComparator()),
+                           table_name, &table);
+
+  // File exceeds threshold, so entire_sst_pinned should be false
+  ASSERT_FALSE(table->get_rep()->entire_sst_pinned);
+  ASSERT_EQ(table->get_rep()->pinned_data_blocks.size(), 0);
+}
+
+TEST_F(PinEntireSstTest, PinEntireSstDisabled) {
+  // Test with pin_entire_sst_max_size = 0 (disabled)
+  BlockBasedTableOptions table_options;
+  table_options.cache_index_and_filter_blocks = true;
+  table_options.block_cache = NewLRUCache(8 * 1024 * 1024);
+  table_options.metadata_cache_options.data_blocks_pinning = PinningTier::kAll;
+  table_options.pin_entire_sst_max_size = 0;  // Disabled
+
+  options_.table_factory.reset(NewBlockBasedTableFactory(table_options));
+  ImmutableOptions ioptions(options_);
+
+  std::vector<std::pair<std::string, std::string>> kv =
+      GenerateKVMap(5 /* num_block */);
+
+  std::string table_name = "PinEntireSstDisabled";
+  CreateTable(table_name, ioptions, kNoCompression, kv);
+
+  std::unique_ptr<BlockBasedTable> table;
+  NewBlockBasedTableReader(FileOptions(), ioptions, InternalKeyComparator(BytewiseComparator()),
+                           table_name, &table);
+
+  // Pinning is disabled, so entire_sst_pinned should be false
+  ASSERT_FALSE(table->get_rep()->entire_sst_pinned);
+  ASSERT_EQ(table->get_rep()->pinned_data_blocks.size(), 0);
+}
+
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {

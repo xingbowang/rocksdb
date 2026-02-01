@@ -740,6 +740,11 @@ DEFINE_uint64(super_block_alignment_space_overhead_ratio,
                   .super_block_alignment_space_overhead_ratio,
               "Configure space overhead for super block alignment");
 
+DEFINE_uint64(pin_entire_sst_max_size,
+              ROCKSDB_NAMESPACE::BlockBasedTableOptions().pin_entire_sst_max_size,
+              "Maximum SST file size for which entire data block pinning is "
+              "enabled. Set to 0 to disable.");
+
 DEFINE_int64(prepopulate_block_cache, 0,
              "Pre-populate hot/warm blocks in block cache. 0 to disable and 1 "
              "to insert during flush");
@@ -4628,6 +4633,7 @@ class Benchmark {
       block_based_options.enable_index_compression =
           FLAGS_enable_index_compression;
       block_based_options.block_align = FLAGS_block_align;
+      block_based_options.pin_entire_sst_max_size = FLAGS_pin_entire_sst_max_size;
       block_based_options.whole_key_filtering = FLAGS_whole_key_filtering;
       block_based_options.max_auto_readahead_size =
           FLAGS_max_auto_readahead_size;

@@ -178,7 +178,8 @@ TEST_F(OptionsSettableTest, BlockBasedTableOptionsAllFieldsSettable) {
       "cache_index_and_filter_blocks_with_high_priority=true;"
       "metadata_cache_options={top_level_index_pinning=kFallback;"
       "partition_pinning=kAll;"
-      "unpartitioned_pinning=kFlushedAndSimilar;};"
+      "unpartitioned_pinning=kFlushedAndSimilar;"
+      "data_blocks_pinning=kNone;};"
       "pin_l0_filter_and_index_blocks_in_cache=1;"
       "pin_top_level_index_and_filter=1;"
       "index_type=kHashSearch;"
@@ -206,6 +207,7 @@ TEST_F(OptionsSettableTest, BlockBasedTableOptionsAllFieldsSettable) {
       "prepopulate_block_cache=kDisable;"
       "initial_auto_readahead_size=0;"
       "num_file_reads_for_auto_readahead=0;"
+      "pin_entire_sst_max_size=1048576;"
       "fail_if_no_udi_on_open=true",
       new_bbto));
 

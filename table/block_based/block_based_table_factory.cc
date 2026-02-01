@@ -216,6 +216,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
         {"unpartitioned_pinning",
          OptionTypeInfo::Enum<PinningTier>(
              offsetof(struct MetadataCacheOptions, unpartitioned_pinning),
+             &pinning_tier_type_string_map)},
+        {"data_blocks_pinning",
+         OptionTypeInfo::Enum<PinningTier>(
+             offsetof(struct MetadataCacheOptions, data_blocks_pinning),
              &pinning_tier_type_string_map)}};
 
 static std::unordered_map<std::string,
@@ -406,6 +410,9 @@ static struct BlockBasedTableTypeInfo {
          {offsetof(struct BlockBasedTableOptions,
                    num_file_reads_for_auto_readahead),
           OptionType::kUInt64T, OptionVerificationType::kNormal}},
+        {"pin_entire_sst_max_size",
+         {offsetof(struct BlockBasedTableOptions, pin_entire_sst_max_size),
+          OptionType::kSizeT, OptionVerificationType::kNormal}},
         {"fail_if_no_udi_on_open",
          {offsetof(struct BlockBasedTableOptions, fail_if_no_udi_on_open),
           OptionType::kBoolean, OptionVerificationType::kNormal}},
@@ -626,6 +633,19 @@ Status BlockBasedTableFactory::ValidateOptions(
     return Status::InvalidArgument(
         "Enable pin_l0_filter_and_index_blocks_in_cache, "
         ", but block cache is disabled");
+  }
+  if (table_options_.metadata_cache_options.data_blocks_pinning !=
+          PinningTier::kNone &&
+      !table_options_.cache_index_and_filter_blocks) {
+    return Status::InvalidArgument(
+        "data_blocks_pinning requires cache_index_and_filter_blocks to be "
+        "enabled");
+  }
+  if (table_options_.metadata_cache_options.data_blocks_pinning !=
+          PinningTier::kNone &&
+      table_options_.no_block_cache) {
+    return Status::InvalidArgument(
+        "data_blocks_pinning requires block cache to be enabled");
   }
   if (!IsSupportedFormatVersion(table_options_.format_version) &&
       !TEST_AllowUnsupportedFormatVersion()) {
@@ -949,6 +969,9 @@ std::string BlockBasedTableFactory::GetPrintableOptions() const {
   snprintf(buffer, kBufferSize,
            "  num_file_reads_for_auto_readahead: %" PRIu64 "\n",
            table_options_.num_file_reads_for_auto_readahead);
+  ret.append(buffer);
+  snprintf(buffer, kBufferSize, "  pin_entire_sst_max_size: %zu\n",
+           table_options_.pin_entire_sst_max_size);
   ret.append(buffer);
   return ret;
 }

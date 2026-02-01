@@ -392,6 +392,13 @@ public class BlockBasedTableConfigTest {
   }
 
   @Test
+  public void pinEntireSstMaxSize() {
+    final BlockBasedTableConfig blockBasedTableConfig = new BlockBasedTableConfig();
+    blockBasedTableConfig.setPinEntireSstMaxSize(4 * 1024 * 1024);
+    assertThat(blockBasedTableConfig.pinEntireSstMaxSize()).isEqualTo(4 * 1024 * 1024);
+  }
+
+  @Test
   public void indexShortening() {
     final BlockBasedTableConfig blockBasedTableConfig = new BlockBasedTableConfig();
     blockBasedTableConfig.setIndexShortening(IndexShorteningMode.kShortenSeparatorsAndSuccessor);

@@ -400,6 +400,7 @@ default_params = {
         [0, 128 * 1024, 512 * 1024, 2 * 1024 * 1024]
     ),
     "super_block_alignment_space_overhead_ratio": lambda: random.choice([0, 32, 4096]),
+    "pin_entire_sst_max_size": lambda: random.choice([0, 0, 0, 1024 * 1024, 4 * 1024 * 1024]),
     "lowest_used_cache_tier": lambda: random.choice([0, 1, 2]),
     "enable_custom_split_merge": lambda: random.choice([0, 1]),
     "adm_policy": lambda: random.choice([0, 1, 2, 3]),

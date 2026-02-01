@@ -42,6 +42,7 @@ public class BlockBasedTableConfig extends TableFormatConfig {
     blockAlign = false;
     superBlockAlignmentSize = 0;
     superBlockAlignmentSpaceOverheadRatio = 128;
+    pinEntireSstMaxSize = 0;
     indexShortening = IndexShorteningMode.kShortenSeparators;
 
     // NOTE: ONLY used if blockCache == null
@@ -64,6 +65,7 @@ public class BlockBasedTableConfig extends TableFormatConfig {
       final boolean verifyCompression, final int readAmpBytesPerBit, final int formatVersion,
       final boolean enableIndexCompression, final boolean blockAlign,
       final long superBlockAlignmentSize, final long superBlockAlignmentSpaceOverheadRatio,
+      final long pinEntireSstMaxSize,
       final byte indexShortening, final byte filterPolicyType, final long filterPolicyHandle,
       final double filterPolicyConfigValue) {
     this.cacheIndexAndFilterBlocks = cacheIndexAndFilterBlocks;
@@ -91,6 +93,7 @@ public class BlockBasedTableConfig extends TableFormatConfig {
     this.blockAlign = blockAlign;
     this.superBlockAlignmentSize = superBlockAlignmentSize;
     this.superBlockAlignmentSpaceOverheadRatio = superBlockAlignmentSpaceOverheadRatio;
+    this.pinEntireSstMaxSize = pinEntireSstMaxSize;
     this.indexShortening = IndexShorteningMode.values()[indexShortening];
     try (Filter filterPolicy = FilterPolicyType.values()[filterPolicyType].createFilter(
              filterPolicyHandle, filterPolicyConfigValue)) {
@@ -849,6 +852,32 @@ public class BlockBasedTableConfig extends TableFormatConfig {
   }
 
   /**
+   * Get the maximum SST file size for which entire data block pinning is enabled.
+   *
+   * @return the maximum SST file size for entire data block pinning.
+   */
+  public long pinEntireSstMaxSize() {
+    return pinEntireSstMaxSize;
+  }
+
+  /**
+   * Set the maximum SST file size for which entire data block pinning is enabled.
+   * When set to 0, entire SST pinning is disabled.
+   *
+   * This is useful for BlobDB configurations where SST files are small
+   * (containing only keys and blob references) and can benefit from being
+   * entirely memory-resident.
+   *
+   * @param pinEntireSstMaxSize the maximum SST file size for entire data block pinning.
+   *
+   * @return the reference to the current option.
+   */
+  public BlockBasedTableConfig setPinEntireSstMaxSize(final long pinEntireSstMaxSize) {
+    this.pinEntireSstMaxSize = pinEntireSstMaxSize;
+    return this;
+  }
+
+  /**
    * Get the index shortening mode.
    *
    * @return the index shortening mode.
@@ -995,7 +1024,8 @@ public class BlockBasedTableConfig extends TableFormatConfig {
         indexBlockRestartInterval, metadataBlockSize, partitionFilters, optimizeFiltersForMemory,
         useDeltaEncoding, filterPolicyHandle, wholeKeyFiltering, verifyCompression,
         readAmpBytesPerBit, formatVersion, enableIndexCompression, blockAlign,
-        superBlockAlignmentSize, superBlockAlignmentSpaceOverheadRatio, indexShortening.getValue(),
+        superBlockAlignmentSize, superBlockAlignmentSpaceOverheadRatio, pinEntireSstMaxSize,
+        indexShortening.getValue(),
         blockCacheSize, blockCacheNumShardBits);
   }
 
@@ -1012,7 +1042,8 @@ public class BlockBasedTableConfig extends TableFormatConfig {
       final boolean wholeKeyFiltering, final boolean verifyCompression,
       final int readAmpBytesPerBit, final int formatVersion, final boolean enableIndexCompression,
       final boolean blockAlign, final long superBlockAlignmentSize,
-      final long superBlockAlignmentSpaceOverheadRatio, final byte indexShortening,
+      final long superBlockAlignmentSpaceOverheadRatio, final long pinEntireSstMaxSize,
+      final byte indexShortening,
 
       @Deprecated final long blockCacheSize, @Deprecated final int blockCacheNumShardBits);
 
@@ -1045,6 +1076,7 @@ public class BlockBasedTableConfig extends TableFormatConfig {
   private boolean blockAlign;
   private long superBlockAlignmentSize;
   private long superBlockAlignmentSpaceOverheadRatio;
+  private long pinEntireSstMaxSize;
   private IndexShorteningMode indexShortening;
 
   // NOTE: ONLY used if blockCache == null
