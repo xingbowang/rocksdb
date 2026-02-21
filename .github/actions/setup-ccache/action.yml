@@ -1,0 +1,33 @@
+name: setup-ccache
+description: Setup ccache for faster C++ compilation caching
+inputs:
+  cache-key-prefix:
+    description: Unique prefix for the cache key (e.g., 'build-linux')
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set ccache environment variables
+      run: |
+        echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
+        echo "CCACHE_BASEDIR=${{ github.workspace }}" >> $GITHUB_ENV
+        echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+      shell: bash
+    - name: Install ccache
+      run: which ccache || (apt-get update && apt-get install -y ccache)
+      shell: bash
+    - name: Restore ccache
+      uses: actions/cache@v4
+      with:
+        path: .ccache
+        key: ccache-${{ inputs.cache-key-prefix }}-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |-
+          ccache-${{ inputs.cache-key-prefix }}-${{ github.ref }}-
+          ccache-${{ inputs.cache-key-prefix }}-refs/heads/main-
+          ccache-${{ inputs.cache-key-prefix }}-
+    - name: Add ccache to PATH
+      run: echo "/usr/lib/ccache" >> $GITHUB_PATH
+      shell: bash
+    - name: Zero ccache stats
+      run: ccache -z
+      shell: bash
