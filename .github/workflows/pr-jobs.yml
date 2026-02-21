@@ -114,7 +114,7 @@ jobs:
     - name: Zero ccache stats
       run: ccache -z
       shell: bash
-    - run: make V=1 J=32 -j32 check
+    - run: make V=1 J=32 -j32 all  # TEMPORARY: skip tests to validate ccache
     - name: Print ccache stats
       run: ccache -s
       if: always()
@@ -225,7 +225,7 @@ jobs:
     - name: Zero ccache stats
       run: ccache -z
       shell: bash
-    - run: mkdir build && cd build && cmake -DWITH_GFLAGS=1 -DWITH_BENCHMARK=1 -DCMAKE_CXX_FLAGS=-DNROCKSDB_THREAD_STATUS .. && make VERBOSE=1 -j20 && ctest -j20
+    - run: mkdir build && cd build && cmake -DWITH_GFLAGS=1 -DWITH_BENCHMARK=1 -DCMAKE_CXX_FLAGS=-DNROCKSDB_THREAD_STATUS .. && make VERBOSE=1 -j20  # TEMPORARY: skip ctest to validate ccache
     - name: Print ccache stats
       run: ccache -s
       if: always()
