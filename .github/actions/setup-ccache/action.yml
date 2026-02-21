@@ -12,9 +12,17 @@ runs:
         echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
         echo "CCACHE_BASEDIR=${{ github.workspace }}" >> $GITHUB_ENV
         echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+        echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
+        echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> $GITHUB_ENV
       shell: bash
     - name: Install ccache
-      run: which ccache || (apt-get update && apt-get install -y ccache)
+      run: |
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          brew install ccache || true
+        elif ! which ccache; then
+          apt-get update && apt-get install -y ccache 2>/dev/null || \
+          sudo apt-get update && sudo apt-get install -y ccache
+        fi
       shell: bash
     - name: Restore ccache
       uses: actions/cache@v4
@@ -26,7 +34,12 @@ runs:
           ccache-${{ inputs.cache-key-prefix }}-refs/heads/main-
           ccache-${{ inputs.cache-key-prefix }}-
     - name: Add ccache to PATH
-      run: echo "/usr/lib/ccache" >> $GITHUB_PATH
+      run: |
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          echo "$(brew --prefix ccache)/libexec" >> $GITHUB_PATH
+        else
+          echo "/usr/lib/ccache" >> $GITHUB_PATH
+        fi
       shell: bash
     - name: Zero ccache stats
       run: ccache -z

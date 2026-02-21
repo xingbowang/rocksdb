@@ -494,8 +494,15 @@ jobs:
     - uses: "./.github/actions/increase-max-open-files-on-macos"
     - uses: "./.github/actions/install-gflags-on-macos"
     - uses: "./.github/actions/pre-steps-macos"
+    - uses: "./.github/actions/setup-ccache"
+      with:
+        cache-key-prefix: build-macos
     - name: Build
       run: ulimit -S -n `ulimit -H -n` && make V=1 J=16 -j8 all
+    - name: Print ccache stats
+      run: ccache -s
+      if: always()
+      shell: bash
     - uses: "./.github/actions/post-steps"
   # ========================= MacOS with Tests ======================== #
   build-macos-cmake:
@@ -513,6 +520,9 @@ jobs:
     - uses: "./.github/actions/increase-max-open-files-on-macos"
     - uses: "./.github/actions/install-gflags-on-macos"
     - uses: "./.github/actions/pre-steps-macos"
+    - uses: "./.github/actions/setup-ccache"
+      with:
+        cache-key-prefix: build-macos-cmake
     - name: cmake generate project file
       run: ulimit -S -n `ulimit -H -n` && mkdir build && cd build && cmake -DWITH_GFLAGS=1 ..
     - name: Build tests
@@ -529,6 +539,10 @@ jobs:
     - name: Run shard 3 out of 4 test shards
       run: ulimit -S -n `ulimit -H -n` && cd build && ctest -j8 -I 3,,4
       if: ${{ matrix.run_sharded_tests == 3 }}
+    - name: Print ccache stats
+      run: ccache -s
+      if: always()
+      shell: bash
     - uses: "./.github/actions/post-steps"
   # ======================== Windows with Tests ======================= #
   # NOTE: some windows jobs are in "nightly" to save resources
@@ -637,6 +651,9 @@ jobs:
     - uses: "./.github/actions/install-gflags-on-macos"
     - uses: "./.github/actions/install-jdk8-on-macos"
     - uses: "./.github/actions/pre-steps-macos"
+    - uses: "./.github/actions/setup-ccache"
+      with:
+        cache-key-prefix: build-macos-java
     - name: Set Java Environment
       run: |-
         echo "JAVA_HOME=${JAVA_HOME}"
@@ -644,6 +661,10 @@ jobs:
         which javac && javac -version
     - name: Test RocksDBJava
       run: make V=1 J=16 -j16 jtest
+    - name: Print ccache stats
+      run: ccache -s
+      if: always()
+      shell: bash
     - uses: "./.github/actions/post-steps"
   build-macos-java-static:
     if: needs.config.outputs.only_job == 'build-macos-java-static' || (needs.config.outputs.only_job == '' && github.repository_owner == 'facebook')
@@ -660,6 +681,9 @@ jobs:
     - uses: "./.github/actions/install-gflags-on-macos"
     - uses: "./.github/actions/install-jdk8-on-macos"
     - uses: "./.github/actions/pre-steps-macos"
+    - uses: "./.github/actions/setup-ccache"
+      with:
+        cache-key-prefix: build-macos-java-static
     - name: Set Java Environment
       run: |-
         echo "JAVA_HOME=${JAVA_HOME}"
@@ -667,6 +691,10 @@ jobs:
         which javac && javac -version
     - name: Build RocksDBJava x86 and ARM Static Libraries
       run: make V=1 J=16 -j16 rocksdbjavastaticosx
+    - name: Print ccache stats
+      run: ccache -s
+      if: always()
+      shell: bash
     - uses: "./.github/actions/post-steps"
   build-macos-java-static-universal:
     if: needs.config.outputs.only_job == 'build-macos-java-static-universal' || (needs.config.outputs.only_job == '' && github.repository_owner == 'facebook')
@@ -683,6 +711,9 @@ jobs:
     - uses: "./.github/actions/install-gflags-on-macos"
     - uses: "./.github/actions/install-jdk8-on-macos"
     - uses: "./.github/actions/pre-steps-macos"
+    - uses: "./.github/actions/setup-ccache"
+      with:
+        cache-key-prefix: build-macos-java-static-universal
     - name: Set Java Environment
       run: |-
         echo "JAVA_HOME=${JAVA_HOME}"
@@ -690,6 +721,10 @@ jobs:
         which javac && javac -version
     - name: Build RocksDBJava Universal Binary Static Library
       run: make V=1 J=16 -j16 rocksdbjavastaticosx_ub
+    - name: Print ccache stats
+      run: ccache -s
+      if: always()
+      shell: bash
     - uses: "./.github/actions/post-steps"
   build-linux-java-pmd:
     if: needs.config.outputs.only_job == 'build-linux-java-pmd' || (needs.config.outputs.only_job == '' && github.repository_owner == 'facebook')
@@ -727,5 +762,12 @@ jobs:
       - uses: actions/checkout@v4.1.0
       - uses: "./.github/actions/pre-steps"
       - run: sudo apt-get update && sudo apt-get install -y build-essential
+      - uses: "./.github/actions/setup-ccache"
+        with:
+          cache-key-prefix: build-linux-arm
       - run: ROCKSDBTESTS_PLATFORM_DEPENDENT=only make V=1 J=4 -j4 all_but_some_tests check_some
+      - name: Print ccache stats
+        run: ccache -s
+        if: always()
+        shell: bash
       - uses: "./.github/actions/post-steps"
