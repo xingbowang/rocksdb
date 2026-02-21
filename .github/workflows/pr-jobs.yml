@@ -4,7 +4,7 @@ permissions: {}
 env:
   # Set to a job name to run only that job (on any repo), or leave empty for
   # normal behavior (all jobs on facebook repo only).
-  ONLY_JOB: 'build-linux'
+  ONLY_JOB: ''
 jobs:
   config:
     runs-on: ubuntu-latest
@@ -89,32 +89,13 @@ jobs:
     container:
       image: ghcr.io/facebook/rocksdb_ubuntu:22.1
       options: --shm-size=16gb
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_NOHASHDIR: "true"
     steps:
     - uses: actions/checkout@v4.1.0
     - uses: "./.github/actions/pre-steps"
-    - name: Install ccache
-      run: which ccache || (apt-get update && apt-get install -y ccache)
-      shell: bash
-    - name: Restore ccache
-      uses: actions/cache@v4
+    - uses: "./.github/actions/setup-ccache"
       with:
-        path: .ccache
-        key: ccache-build-linux-${{ github.ref }}-${{ github.sha }}
-        restore-keys: |-
-          ccache-build-linux-${{ github.ref }}-
-          ccache-build-linux-refs/heads/main-
-          ccache-build-linux-
-    - name: Add ccache to PATH
-      run: echo "/usr/lib/ccache" >> $GITHUB_PATH
-      shell: bash
-    - name: Zero ccache stats
-      run: ccache -z
-      shell: bash
-    - run: make V=1 J=32 -j32 all  # TEMPORARY: skip tests to validate ccache
+        cache-key-prefix: build-linux
+    - run: make V=1 J=32 -j32 check
     - name: Print ccache stats
       run: ccache -s
       if: always()
@@ -203,29 +184,13 @@ jobs:
     container:
       image: ghcr.io/facebook/rocksdb_ubuntu:22.1
       options: --shm-size=16gb
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_NOHASHDIR: "true"
     steps:
     - uses: actions/checkout@v4.1.0
     - uses: "./.github/actions/pre-steps"
-    - name: Install ccache
-      run: which ccache || (apt-get update && apt-get install -y ccache)
-      shell: bash
-    - name: Restore ccache
-      uses: actions/cache@v4
+    - uses: "./.github/actions/setup-ccache"
       with:
-        path: .ccache
-        key: ccache-cmake-benchmark-${{ github.ref }}-${{ github.sha }}
-        restore-keys: |-
-          ccache-cmake-benchmark-${{ github.ref }}-
-          ccache-cmake-benchmark-refs/heads/main-
-          ccache-cmake-benchmark-
-    - name: Zero ccache stats
-      run: ccache -z
-      shell: bash
-    - run: mkdir build && cd build && cmake -DWITH_GFLAGS=1 -DWITH_BENCHMARK=1 -DCMAKE_CXX_FLAGS=-DNROCKSDB_THREAD_STATUS .. && make VERBOSE=1 -j20  # TEMPORARY: skip ctest to validate ccache
+        cache-key-prefix: cmake-benchmark
+    - run: mkdir build && cd build && cmake -DWITH_GFLAGS=1 -DWITH_BENCHMARK=1 -DCMAKE_CXX_FLAGS=-DNROCKSDB_THREAD_STATUS .. && make VERBOSE=1 -j20 && ctest -j20
     - name: Print ccache stats
       run: ccache -s
       if: always()
