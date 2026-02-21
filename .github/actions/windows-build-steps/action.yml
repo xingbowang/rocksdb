@@ -8,9 +8,11 @@ runs:
     uses: hendrikmuhs/ccache-action@v1.2
     with:
       max-size: "10GB"
-  - name: Verify ccache restore
+  - name: Configure and verify ccache
     shell: pwsh
     run: |
+      ccache --set-config=base_dir=C:\a\rocksdb\rocksdb
+      ccache --set-config=hash_dir=false
       echo "=== ccache directory status ==="
       if (Test-Path C:\a\rocksdb\rocksdb\.ccache) {
         $size = (Get-ChildItem -Recurse C:\a\rocksdb\rocksdb\.ccache | Measure-Object -Property Length -Sum).Sum / 1MB
@@ -19,6 +21,8 @@ runs:
       } else {
         echo "Cache directory does not exist (cold start)"
       }
+      echo "=== ccache config ==="
+      ccache -p | Select-String "base_dir|hash_dir|cache_dir"
       echo "=== ccache stats before build ==="
       ccache -s
       ccache -z
