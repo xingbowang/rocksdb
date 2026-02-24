@@ -129,13 +129,6 @@ void Hash2x64(const char* data, size_t n, uint64_t seed, uint64_t* high64,
 
 namespace {
 
-inline uint64_t XXH3_avalanche(uint64_t h64) {
-  h64 ^= h64 >> 37;
-  h64 *= 0x165667919E3779F9U;
-  h64 ^= h64 >> 32;
-  return h64;
-}
-
 inline uint64_t XXH3_unavalanche(uint64_t h64) {
   h64 ^= h64 >> 32;
   h64 *= 0x8da8ee41d6df849U;  // inverse of 0x165667919E3779F9U
@@ -144,26 +137,6 @@ inline uint64_t XXH3_unavalanche(uint64_t h64) {
 }
 
 }  // namespace
-
-void BijectiveHash2x64(uint64_t in_high64, uint64_t in_low64, uint64_t seed,
-                       uint64_t* out_high64, uint64_t* out_low64) {
-  // Adapted from XXH3_len_9to16_128b
-  const uint64_t bitflipl = /*secret part*/ 0x59973f0033362349U - seed;
-  const uint64_t bitfliph = /*secret part*/ 0xc202797692d63d58U + seed;
-  Unsigned128 tmp128 =
-      Multiply64to128(in_low64 ^ in_high64 ^ bitflipl, 0x9E3779B185EBCA87U);
-  uint64_t lo = Lower64of128(tmp128);
-  uint64_t hi = Upper64of128(tmp128);
-  lo += 0x3c0000000000000U;  // (len - 1) << 54
-  in_high64 ^= bitfliph;
-  hi += in_high64 + (Lower32of64(in_high64) * uint64_t{0x85EBCA76});
-  lo ^= EndianSwapValue(hi);
-  tmp128 = Multiply64to128(lo, 0xC2B2AE3D27D4EB4FU);
-  lo = Lower64of128(tmp128);
-  hi = Upper64of128(tmp128) + (hi * 0xC2B2AE3D27D4EB4FU);
-  *out_low64 = XXH3_avalanche(lo);
-  *out_high64 = XXH3_avalanche(hi);
-}
 
 void BijectiveUnhash2x64(uint64_t in_high64, uint64_t in_low64, uint64_t seed,
                          uint64_t* out_high64, uint64_t* out_low64) {
@@ -187,11 +160,6 @@ void BijectiveUnhash2x64(uint64_t in_high64, uint64_t in_low64, uint64_t seed,
   lo ^= hi ^ bitflipl;
   *out_high64 = hi;
   *out_low64 = lo;
-}
-
-void BijectiveHash2x64(uint64_t in_high64, uint64_t in_low64,
-                       uint64_t* out_high64, uint64_t* out_low64) {
-  BijectiveHash2x64(in_high64, in_low64, /*seed*/ 0, out_high64, out_low64);
 }
 
 void BijectiveUnhash2x64(uint64_t in_high64, uint64_t in_low64,

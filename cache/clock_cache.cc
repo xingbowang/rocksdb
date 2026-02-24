@@ -27,6 +27,7 @@
 #include "cache/secondary_cache_adapter.h"
 #include "logging/logging.h"
 #include "port/likely.h"
+#include "port/port.h"
 #include "rocksdb/env.h"
 #include "util/autovector.h"
 #include "util/hash.h"
@@ -1063,6 +1064,8 @@ inline FixedHyperClockTable::HandleImpl* FixedHyperClockTable::FindSlot(
   size_t increment = static_cast<size_t>(hashed_key[0]) | 1U;
   size_t first = ModTableSize(base);
   size_t current = first;
+  // Prefetch the first probe slot to overlap memory latency with match_fn setup
+  PREFETCH(&array_[current], 0, 1);
   bool is_last;
   do {
     HandleImpl* h = &array_[current];
@@ -1074,6 +1077,10 @@ inline FixedHyperClockTable::HandleImpl* FixedHyperClockTable::FindSlot(
     }
     current = ModTableSize(current + increment);
     is_last = current == first;
+    // Prefetch the next probe slot while processing update_fn
+    if (!is_last) {
+      PREFETCH(&array_[current], 0, 1);
+    }
     update_fn(h, is_last);
   } while (!is_last);
   // We looped back.
@@ -1144,6 +1151,10 @@ inline void FixedHyperClockTable::Evict(size_t requested_charge, InsertState&,
 
     // Advance clock pointer (concurrently)
     old_clock_pointer = clock_pointer_.FetchAddRelaxed(step_size);
+    // Prefetch the next batch of slots
+    for (size_t i = 0; i < step_size; i++) {
+      PREFETCH(&array_[ModTableSize(Lower32of64(old_clock_pointer + i))], 0, 1);
+    }
   }
 }
 
@@ -3107,8 +3118,12 @@ AutoHyperClockTable::HandleImpl* AutoHyperClockTable::Lookup(
 
   HandleImpl* const arr = array_.Get();
   NextWithShift next_with_shift = arr[home].head_next_with_shift.LoadRelaxed();
+  // Prefetch the first chain entry
+  if (!next_with_shift.IsEnd()) {
+    PREFETCH(&arr[next_with_shift.GetNext()], 0, 1);
+  }
   for (size_t i = 0; !next_with_shift.IsEnd() && i < 10; ++i) {
-    HandleImpl* h = &arr[next_with_shift.IsEnd()];
+    HandleImpl* h = &arr[next_with_shift.GetNext()];
     // Attempt cheap key match without acquiring a read ref. This could give a
     // false positive, which is re-checked after acquiring read ref, or false
     // negative, which is re-checked in the full Lookup. Also, this is a
@@ -3142,6 +3157,10 @@ AutoHyperClockTable::HandleImpl* AutoHyperClockTable::Lookup(
     }
 
     next_with_shift = h->chain_next_with_shift.LoadRelaxed();
+    // Prefetch the next chain entry
+    if (!next_with_shift.IsEnd()) {
+      PREFETCH(&arr[next_with_shift.GetNext()], 0, 1);
+    }
   }
 
   // If we get here, falling back on full Lookup algorithm.
