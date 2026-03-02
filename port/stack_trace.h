@@ -18,14 +18,20 @@ namespace port {
 // Currently supports only some POSIX implementations. No-op otherwise.
 void InstallStackTraceHandler();
 
-// Prints stack, skips skip_first_frames frames
 void PrintStack(int first_frames_to_skip = 0);
 
-// Prints the given callstack
 void PrintAndFreeStack(void* callstack, int num_frames);
 
-// Save the current callstack
 void* SaveStack(int* num_frame, int first_frames_to_skip = 0);
+
+// Register a callback to be invoked when a fatal signal is received,
+// before the stack trace is printed. This is useful for printing diagnostic
+// information (e.g., recently injected errors) when a crash occurs.
+// The callback must only call async-signal-safe functions (write, snprintf,
+// etc.) or functions that are safe enough in practice (fprintf to stderr).
+// Only one callback is supported; subsequent calls overwrite the previous one.
+using CrashCallback = void (*)();
+void RegisterCrashCallback(CrashCallback callback);
 
 }  // namespace port
 }  // namespace ROCKSDB_NAMESPACE
