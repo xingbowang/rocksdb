@@ -1343,9 +1343,16 @@ Status InlineSkipList<Comparator>::MultiGet(
           return Corruption(prev_node, node, allow_data_in_errors);
         }
       }
-      // Update finger to track walk-forward position so the next key's
-      // search starts from here rather than from the stale search result.
-      finger.prev_[0] = prev_node;
+      // Update only finger.next_[0] to reflect how far we walked.
+      // We intentionally do NOT update finger.prev_[0] here because
+      // prev_node may have a key >= the next lookup key in internal key
+      // order (e.g., when the batch contains duplicate user keys, the
+      // walk-forward processes all entries for that user key, leaving
+      // prev_node at the last entry which sorts after the lookup key
+      // due to having a lower sequence number). Updating prev_[0] in
+      // this case would violate the invariant prev_[0]->Key() < key
+      // expected by FindSpliceForLevel. The finger.prev_[0] from
+      // FindGreaterOrEqualWithFinger is always a safe starting point.
       finger.next_[0] = node;
     }
   }

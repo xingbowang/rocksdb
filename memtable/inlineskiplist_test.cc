@@ -538,6 +538,57 @@ TEST_F(InlineSkipTest, MultiGetRandomized) {
   }
 }
 
+// Test MultiGet with duplicate keys in the batch. The callback walk-forward
+// must not advance finger.prev_[0] past the found node, because the next
+// lookup for the same key would then find prev_[0]->Key() >= key, violating
+// the FindSpliceForLevel assertion.
+TEST_F(InlineSkipTest, MultiGetDuplicateKeys) {
+  Arena arena;
+  TestComparator cmp;
+  InlineSkipList<TestComparator> list(cmp, &arena);
+
+  for (Key k : {10, 20, 30, 40, 50}) {
+    char* buf = list.AllocateKey(sizeof(Key));
+    memcpy(buf, &k, sizeof(Key));
+    list.Insert(buf);
+  }
+
+  struct CallbackArg {
+    bool found;
+    Key found_key;
+  };
+  auto callback = [](void* arg, const char* entry) -> bool {
+    auto* cb = static_cast<CallbackArg*>(arg);
+    if (!cb->found) {
+      cb->found = true;
+      cb->found_key = Decode(entry);
+      return true;  // walk forward one step
+    }
+    return false;
+  };
+
+  const size_t num_queries = 3;
+  Key query_keys[num_queries] = {20, 20, 30};
+  const char* key_ptrs[num_queries];
+  void* cb_args[num_queries];
+  CallbackArg cb_data[num_queries];
+  for (size_t i = 0; i < num_queries; i++) {
+    key_ptrs[i] = Encode(&query_keys[i]);
+    cb_data[i].found = false;
+    cb_data[i].found_key = 0;
+    cb_args[i] = &cb_data[i];
+  }
+
+  ASSERT_OK(list.MultiGet(num_queries, key_ptrs, cb_args, callback));
+
+  ASSERT_TRUE(cb_data[0].found);
+  ASSERT_EQ(cb_data[0].found_key, 20u);
+  ASSERT_TRUE(cb_data[1].found);
+  ASSERT_EQ(cb_data[1].found_key, 20u);
+  ASSERT_TRUE(cb_data[2].found);
+  ASSERT_EQ(cb_data[2].found_key, 30u);
+}
+
 #if !defined(ROCKSDB_VALGRIND_RUN) || defined(ROCKSDB_FULL_VALGRIND_RUN)
 // We want to make sure that with a single writer and multiple
 // concurrent readers (with no synchronization other than when a
