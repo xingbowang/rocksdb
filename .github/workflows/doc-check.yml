@@ -49,7 +49,7 @@ jobs:
         with:
           prompt_file: /tmp/review_prompt.txt
           model: claude-sonnet-4-20250514
-          max_turns: "15"
+          max_turns: "30"
           allowed_tools: "View,GlobTool,GrepTool"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
@@ -67,28 +67,38 @@ jobs:
             exit 1
           fi
 
-          # Extract the result field from JSON
-          RESULT=$(python3 -c "
-          import json
-          with open('$LOG') as f:
+          # Extract result and check for errors
+          python3 << 'PYEOF'
+          import json, sys
+
+          with open("/home/runner/work/_temp/claude-execution-output.json") as f:
               data = json.load(f)
-          print(data.get('result', ''))
-          " 2>/dev/null || true)
 
-          echo "=== Claude's Assessment ==="
-          echo "$RESULT"
-          echo "==========================="
+          subtype = data.get("subtype", "")
+          result = data.get("result", "")
+          is_error = data.get("is_error", False)
 
-          if echo "$RESULT" | grep -q "RESULT: FAIL"; then
-            echo "Documentation updates are needed. See Claude's assessment above."
-            exit 1
-          elif echo "$RESULT" | grep -q "RESULT: PASS"; then
-            echo "Documentation check passed."
-            exit 0
-          else
-            echo "::error::Could not determine PASS/FAIL from Claude's response. Failing to be safe."
-            exit 1
-          fi
+          print("=== Claude's Assessment ===")
+          print(result if result else "(no result text)")
+          print("===========================")
+          print(f"subtype={subtype}, is_error={is_error}, num_turns={data.get('num_turns', 'N/A')}")
+
+          if subtype == "error_max_turns":
+              print("::error::Claude ran out of turns before producing a verdict. Increase max_turns.")
+              sys.exit(1)
+          elif is_error:
+              print(f"::error::Claude returned an error: {subtype}")
+              sys.exit(1)
+          elif "RESULT: FAIL" in result:
+              print("Documentation updates are needed. See Claude's assessment above.")
+              sys.exit(1)
+          elif "RESULT: PASS" in result:
+              print("Documentation check passed.")
+              sys.exit(0)
+          else:
+              print("::error::Could not determine PASS/FAIL from Claude's response. Failing to be safe.")
+              sys.exit(1)
+          PYEOF
 
       - name: Fail if no API key
         if: env.HAS_KEY != 'true'
