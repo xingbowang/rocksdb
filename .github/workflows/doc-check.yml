@@ -72,7 +72,21 @@ jobs:
           import json, sys
 
           with open("/home/runner/work/_temp/claude-execution-output.json") as f:
-              data = json.load(f)
+              raw = json.load(f)
+
+          # Handle both single object and array of objects
+          if isinstance(raw, list):
+              # Find the result entry in the array
+              data = None
+              for entry in raw:
+                  if isinstance(entry, dict) and entry.get("type") == "result":
+                      data = entry
+                      break
+              if data is None:
+                  # Fall back to last entry
+                  data = raw[-1] if raw else {}
+          else:
+              data = raw
 
           subtype = data.get("subtype", "")
           result = data.get("result", "")
