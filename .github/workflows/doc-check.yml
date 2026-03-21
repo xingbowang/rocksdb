@@ -48,10 +48,9 @@ jobs:
         uses: anthropics/claude-code-base-action@e8132bc5e637a42c27763fc757faa37e1ee43b34
         with:
           prompt_file: /tmp/review_prompt.txt
-          claude_args: >-
-            --model claude-sonnet-4-6-20250514
-            --max-turns 15
-            --allowedTools View,GlobTool,GrepTool
+          model: claude-sonnet-4-6-20250514
+          max_turns: "15"
+          allowed_tools: "View,GlobTool,GrepTool"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
           DIFF_CONTENT: /tmp/pr_diff.txt
@@ -60,18 +59,30 @@ jobs:
 
       - name: Parse Claude result
         if: env.HAS_KEY == 'true'
-        env:
-          CLAUDE_OUTPUT: ${{ steps.claude-review.outputs.result }}
         run: |
+          # Extract result from the execution log
+          LOG="/home/runner/work/_temp/claude-execution-output.json"
+          if [ ! -f "$LOG" ]; then
+            echo "::error::Claude execution log not found at $LOG"
+            exit 1
+          fi
+
+          # Extract the result field from JSON
+          RESULT=$(python3 -c "
+          import json
+          with open('$LOG') as f:
+              data = json.load(f)
+          print(data.get('result', ''))
+          " 2>/dev/null || true)
+
           echo "=== Claude's Assessment ==="
-          printf '%s\n' "$CLAUDE_OUTPUT"
+          echo "$RESULT"
           echo "==========================="
 
-          if printf '%s' "$CLAUDE_OUTPUT" | grep -q "RESULT: FAIL"; then
-            echo ""
+          if echo "$RESULT" | grep -q "RESULT: FAIL"; then
             echo "Documentation updates are needed. See Claude's assessment above."
             exit 1
-          elif printf '%s' "$CLAUDE_OUTPUT" | grep -q "RESULT: PASS"; then
+          elif echo "$RESULT" | grep -q "RESULT: PASS"; then
             echo "Documentation check passed."
             exit 0
           else
