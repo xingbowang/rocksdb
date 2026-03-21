@@ -61,98 +61,27 @@ jobs:
       - name: Parse Claude result
         if: env.HAS_KEY == 'true'
         run: |
-          # Find the execution log from Claude
-          LOG_FILE=$(find /tmp -name "execution_log*.json" -o -name "*.jsonl" 2>/dev/null | head -1)
-
-          if [ -z "$LOG_FILE" ]; then
-            # Try the default output location
-            LOG_FILE="/tmp/claude_output.txt"
-          fi
-
-          # Extract the last assistant message
-          if [ -f "$LOG_FILE" ]; then
-            # Handle JSONL format (one JSON object per line)
-            LAST_MSG=$(grep -o '"result":"[^"]*"' "$LOG_FILE" | tail -1 | sed 's/"result":"//;s/"$//' || true)
-
-            if [ -z "$LAST_MSG" ]; then
-              # Try extracting from full JSON
-              LAST_MSG=$(python3 -c "
-          import json, sys, glob
-
-          # Try to find any log files
-          log_files = glob.glob('/tmp/execution_log*.json') + glob.glob('/tmp/*.jsonl')
-          for lf in log_files:
-              try:
-                  with open(lf) as f:
-                      for line in f:
-                          line = line.strip()
-                          if not line:
-                              continue
-                          try:
-                              obj = json.loads(line)
-                              if obj.get('role') == 'assistant':
-                                  content = obj.get('content', '')
-                                  if isinstance(content, list):
-                                      for block in content:
-                                          if isinstance(block, dict) and block.get('type') == 'text':
-                                              print(block['text'])
-                                  elif isinstance(content, str):
-                                      print(content)
-                          except json.JSONDecodeError:
-                              continue
-              except Exception:
-                  continue
-          " 2>/dev/null || true)
-            fi
-          fi
-
-          # Also check the step output directly
-          STEP_OUTPUT="${{ steps.claude-review.outputs.result }}"
-          if [ -n "$STEP_OUTPUT" ]; then
-            LAST_MSG="$STEP_OUTPUT"
-          fi
-
-          if [ -z "$LAST_MSG" ]; then
-            echo "Warning: Could not extract Claude's response. Passing by default."
-            exit 0
-          fi
+          # The action writes its result to the step output
+          cat <<'CLAUDE_RESULT' > /tmp/claude_result.txt
+          ${{ steps.claude-review.outputs.result }}
+          CLAUDE_RESULT
 
           echo "=== Claude's Assessment ==="
-          echo "$LAST_MSG"
+          cat /tmp/claude_result.txt
           echo "==========================="
 
-          if echo "$LAST_MSG" | grep -q "RESULT: FAIL"; then
+          if grep -q "RESULT: FAIL" /tmp/claude_result.txt; then
             echo ""
             echo "Documentation updates are needed. See Claude's assessment above."
-
-            # Post as PR comment
-            if command -v gh &> /dev/null; then
-              gh pr comment "${{ github.event.pull_request.number }}" \
-                --body "## Documentation Staleness Check - Action Required
-
-          Claude AI detected that documentation in \`docs/components/\` may need updating based on the source changes in this PR.
-
-          <details>
-          <summary>Claude's Assessment</summary>
-
-          $LAST_MSG
-
-          </details>
-
-          Please review and update the relevant documentation, or confirm the docs are still accurate." \
-                --repo "${{ github.repository }}" 2>/dev/null || true
-            fi
-
             exit 1
-          elif echo "$LAST_MSG" | grep -q "RESULT: PASS"; then
+          elif grep -q "RESULT: PASS" /tmp/claude_result.txt; then
             echo "Documentation check passed."
             exit 0
           else
-            echo "Warning: Could not determine PASS/FAIL from Claude's response. Passing by default."
-            exit 0
+            echo "::error::Could not determine PASS/FAIL from Claude's response. Failing to be safe."
+            cat /tmp/claude_result.txt
+            exit 1
           fi
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Fail if no API key
         if: env.HAS_KEY != 'true'
