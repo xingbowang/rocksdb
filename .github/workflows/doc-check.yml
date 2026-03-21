@@ -143,8 +143,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Skip AI review (no API key)
+      - name: Fail if no API key
         if: env.HAS_KEY != 'true'
         run: |
-          echo "ANTHROPIC_API_KEY not configured. Skipping AI doc review."
-          echo "To enable AI-powered documentation checks, add ANTHROPIC_API_KEY to repository secrets."
+          echo "::error::ANTHROPIC_API_KEY not configured. Add it to repository secrets to enable AI doc review."
+          exit 1
