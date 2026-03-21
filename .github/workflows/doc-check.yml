@@ -60,26 +60,22 @@ jobs:
 
       - name: Parse Claude result
         if: env.HAS_KEY == 'true'
+        env:
+          CLAUDE_OUTPUT: ${{ steps.claude-review.outputs.result }}
         run: |
-          # The action writes its result to the step output
-          cat <<'CLAUDE_RESULT' > /tmp/claude_result.txt
-          ${{ steps.claude-review.outputs.result }}
-          CLAUDE_RESULT
-
           echo "=== Claude's Assessment ==="
-          cat /tmp/claude_result.txt
+          printf '%s\n' "$CLAUDE_OUTPUT"
           echo "==========================="
 
-          if grep -q "RESULT: FAIL" /tmp/claude_result.txt; then
+          if printf '%s' "$CLAUDE_OUTPUT" | grep -q "RESULT: FAIL"; then
             echo ""
             echo "Documentation updates are needed. See Claude's assessment above."
             exit 1
-          elif grep -q "RESULT: PASS" /tmp/claude_result.txt; then
+          elif printf '%s' "$CLAUDE_OUTPUT" | grep -q "RESULT: PASS"; then
             echo "Documentation check passed."
             exit 0
           else
             echo "::error::Could not determine PASS/FAIL from Claude's response. Failing to be safe."
-            cat /tmp/claude_result.txt
             exit 1
           fi
 
