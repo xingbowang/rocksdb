@@ -2049,6 +2049,20 @@ Status DBImpl::GetNewestUserDefinedTimestamp(ColumnFamilyHandle* column_family,
   }
 
   Status status;
+  // Adaptive read amplification limiter: when enabled, throttle point
+  // lookups if read amplification is too high, giving compaction time
+  // to reduce the number of SST levels that need to be checked.
+  if (immutable_db_options_.adaptive_readamp_limit > 0) {
+    int current_num_levels = cfd->current()->storage_info()->num_non_empty_levels();
+    if (current_num_levels > immutable_db_options_.adaptive_readamp_limit) {
+      // Delay read to allow compaction to catch up
+      immutable_db_options_.clock->SleepForMicroseconds(
+          1000 * (current_num_levels - immutable_db_options_.adaptive_readamp_limit));
+      PERF_COUNTER_ADD(get_readamp_delay_nanos,
+          1000 * (current_num_levels - immutable_db_options_.adaptive_readamp_limit));
+    }
+  }
+
   // Acquire SuperVersion
   SuperVersion* sv = GetAndRefSuperVersion(cfd);
   {
@@ -2531,6 +2545,20 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
                             ->expected_max_number_of_operands;
          ++i) {
       get_impl_options.merge_operands[i].Reset();
+    }
+  }
+
+  // Adaptive read amplification limiter: when enabled, throttle point
+  // lookups if read amplification is too high, giving compaction time
+  // to reduce the number of SST levels that need to be checked.
+  if (immutable_db_options_.adaptive_readamp_limit > 0) {
+    int current_num_levels = cfd->current()->storage_info()->num_non_empty_levels();
+    if (current_num_levels > immutable_db_options_.adaptive_readamp_limit) {
+      // Delay read to allow compaction to catch up
+      immutable_db_options_.clock->SleepForMicroseconds(
+          1000 * (current_num_levels - immutable_db_options_.adaptive_readamp_limit));
+      PERF_COUNTER_ADD(get_readamp_delay_nanos,
+          1000 * (current_num_levels - immutable_db_options_.adaptive_readamp_limit));
     }
   }
 

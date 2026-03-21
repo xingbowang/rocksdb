@@ -627,6 +627,12 @@ struct DBOptions {
   // Default: true
   bool paranoid_checks = true;
 
+  // Adaptive read amplification limiter. When set to N > 0, point lookups
+  // (Get/MultiGet) are throttled when the number of non-empty LSM levels
+  // exceeds N. This gives compaction time to reduce read amplification.
+  // Each excess level adds 1ms of delay per read. Default: 0 (disabled).
+  int adaptive_readamp_limit = 0;
+
   // DEPRECATED: This option might be removed in a future release.
   //
   // If true, during memtable flush, RocksDB will validate total entries
