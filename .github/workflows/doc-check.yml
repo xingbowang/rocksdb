@@ -48,7 +48,7 @@ jobs:
         uses: anthropics/claude-code-base-action@e8132bc5e637a42c27763fc757faa37e1ee43b34
         with:
           prompt_file: /tmp/review_prompt.txt
-          model: claude-sonnet-4-6-20250514
+          model: claude-sonnet-4-20250514
           max_turns: "15"
           allowed_tools: "View,GlobTool,GrepTool"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
