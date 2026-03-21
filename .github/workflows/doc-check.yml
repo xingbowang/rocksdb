@@ -3,6 +3,12 @@ name: Documentation Staleness Check
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Base SHA to diff against (default: origin/main)'
+        required: false
+        default: 'origin/main'
 
 jobs:
   doc-check:
@@ -16,8 +22,13 @@ jobs:
 
       - name: Generate PR diff
         run: |
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BASE_SHA="${{ github.event.inputs.base_sha || 'origin/main' }}"
+            HEAD_SHA="HEAD"
+          else
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          fi
           git diff "$BASE_SHA" "$HEAD_SHA" > /tmp/pr_diff.txt
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > /tmp/changed_files.txt
           echo "=== Changed files ==="
