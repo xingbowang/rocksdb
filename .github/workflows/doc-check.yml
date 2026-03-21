@@ -49,7 +49,7 @@ jobs:
         with:
           prompt_file: /tmp/review_prompt.txt
           model: claude-sonnet-4-20250514
-          max_turns: "30"
+          max_turns: "100"
           allowed_tools: "View,GlobTool,GrepTool"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
         env:
