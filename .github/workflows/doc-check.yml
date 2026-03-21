@@ -42,14 +42,14 @@ jobs:
           echo "diff_lines=$DIFF_LINES"
           echo "diff_files=$DIFF_FILES"
 
-          # Use Opus for large changes (>500 lines or >10 files),
+          # Use Opus for complex changes (>300 lines or >10 files),
           # Sonnet for smaller ones
-          if [ "$DIFF_LINES" -gt 500 ] || [ "$DIFF_FILES" -gt 10 ]; then
+          if [ "$DIFF_LINES" -gt 300 ] || [ "$DIFF_FILES" -gt 10 ]; then
             echo "model=claude-opus-4-20250514" >> "$GITHUB_OUTPUT"
-            echo "Selected: Opus (large change: $DIFF_LINES lines, $DIFF_FILES files)"
+            echo "Selected: Opus (complex change: $DIFF_LINES lines, $DIFF_FILES files)"
           else
             echo "model=claude-sonnet-4-20250514" >> "$GITHUB_OUTPUT"
-            echo "Selected: Sonnet (small change: $DIFF_LINES lines, $DIFF_FILES files)"
+            echo "Selected: Sonnet (standard change: $DIFF_LINES lines, $DIFF_FILES files)"
           fi
 
       - name: Build Claude prompt
