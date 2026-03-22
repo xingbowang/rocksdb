@@ -905,7 +905,8 @@ $(parallel_tests):
 gen_parallel_tests:
 	$(AM_V_at)mkdir -p t
 	$(AM_V_at)$(FIND) t -type f -name 'run-*' -exec rm -f {} \;
-	$(MAKE) $(parallel_tests)
+	$(AM_V_at)test -f util/build_version.cc || (echo "Error: run 'make all' before 'make gen_parallel_tests'" >&2; exit 1)
+	$(MAKE) NO_UPDATE_BUILD_VERSION=1 $(parallel_tests)
 
 # Reorder input lines (which are one per test) so that the
 # longest-running tests appear first in the output.
