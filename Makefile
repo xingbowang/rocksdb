@@ -1503,6 +1503,9 @@ db_kv_checksum_test: $(OBJ_DIR)/db/db_kv_checksum_test.o $(TEST_LIBRARY) $(LIBRA
 db_memtable_test: $(OBJ_DIR)/db/db_memtable_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+memtable_batch_test: $(OBJ_DIR)/db/memtable_batch_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 db_merge_operator_test: $(OBJ_DIR)/db/db_merge_operator_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
@@ -1713,6 +1716,9 @@ data_block_hash_index_test: $(OBJ_DIR)/table/block_based/data_block_hash_index_t
 inlineskiplist_test: $(OBJ_DIR)/memtable/inlineskiplist_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+skiplist_batch_bench: $(OBJ_DIR)/memtable/skiplist_batch_bench.o $(LIBRARY)
+	$(AM_LINK)
+
 skiplist_test: $(OBJ_DIR)/memtable/skiplist_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
@@ -1918,6 +1924,9 @@ range_del_aggregator_test: $(OBJ_DIR)/db/range_del_aggregator_test.o $(TEST_LIBR
 	$(AM_LINK)
 
 range_del_aggregator_bench: $(OBJ_DIR)/db/range_del_aggregator_bench.o $(LIBRARY)
+	$(AM_LINK)
+
+batch_add_bench: $(OBJ_DIR)/db/batch_add_bench.o $(LIBRARY)
 	$(AM_LINK)
 
 blob_db_test: $(OBJ_DIR)/utilities/blob_db/blob_db_test.o $(TEST_LIBRARY) $(LIBRARY)
