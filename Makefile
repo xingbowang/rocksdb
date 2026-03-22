@@ -661,6 +661,7 @@ TESTS_PLATFORM_DEPENDENT := \
 	crc32c_test \
 	coding_test \
 	inlineskiplist_test \
+	memtable_batch_test \
 	env_basic_test \
 	env_test \
 	env_logger_test \
