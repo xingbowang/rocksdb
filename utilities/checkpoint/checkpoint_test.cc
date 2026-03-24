@@ -1334,6 +1334,148 @@ TEST_F(CheckpointTest, MixedAtomicThenNonAtomicFlushInQueue) {
   ASSERT_EQ("v1_2", Get(1, "k1_2"));
   ASSERT_EQ("v2", Get(2, "k2"));
 }
+
+TEST_F(CheckpointTest, DBFlushWithForceAtomicFlush) {
+  // Test that DB::Flush() with FlushOptions::force_atomic_flush=true
+  // triggers atomic flush even when DBOptions::atomic_flush is false.
+  Options options = CurrentOptions();
+  options.atomic_flush = false;
+  CreateAndReopenWithCF({"one", "two"}, options);
+
+  ASSERT_OK(Put(0, "key0", "val0"));
+  ASSERT_OK(Put(1, "key1", "val1"));
+  ASSERT_OK(Put(2, "key2", "val2"));
+
+  // Verify atomic flush path is taken via sync point.
+  bool atomic_flush_called = false;
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::AtomicFlushMemTables:AfterScheduleFlush",
+      [&](void* /*arg*/) { atomic_flush_called = true; });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  // Flush all CFs with force_atomic_flush.
+  FlushOptions flush_opts;
+  flush_opts.force_atomic_flush = true;
+  ASSERT_OK(db_->Flush(flush_opts, handles_));
+  ASSERT_TRUE(atomic_flush_called);
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+
+  // Verify data after flush.
+  ASSERT_EQ("val0", Get(0, "key0"));
+  ASSERT_EQ("val1", Get(1, "key1"));
+  ASSERT_EQ("val2", Get(2, "key2"));
+
+  // Also test single-CF Flush with force_atomic_flush.
+  ASSERT_OK(Put(0, "key0_2", "val0_2"));
+  atomic_flush_called = false;
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::AtomicFlushMemTables:AfterScheduleFlush",
+      [&](void* /*arg*/) { atomic_flush_called = true; });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(db_->Flush(flush_opts, handles_[0]));
+  ASSERT_TRUE(atomic_flush_called);
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+
+  ASSERT_EQ("val0_2", Get(0, "key0_2"));
+}
+
+TEST_F(CheckpointTest, DBFlushWithForceAtomicFlush) {
+  // Test that DB::Flush() with FlushOptions::force_atomic_flush=true
+  // triggers atomic flush even when DBOptions::atomic_flush is false.
+  Options options = CurrentOptions();
+  options.atomic_flush = false;
+  CreateAndReopenWithCF({"one", "two"}, options);
+
+  ASSERT_OK(Put(0, "key0", "val0"));
+  ASSERT_OK(Put(1, "key1", "val1"));
+  ASSERT_OK(Put(2, "key2", "val2"));
+
+  // Verify atomic flush path is taken via sync point.
+  bool atomic_flush_called = false;
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::AtomicFlushMemTables:AfterScheduleFlush",
+      [&](void* /*arg*/) { atomic_flush_called = true; });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  // Flush all CFs with force_atomic_flush.
+  FlushOptions flush_opts;
+  flush_opts.force_atomic_flush = true;
+  ASSERT_OK(db_->Flush(flush_opts, handles_));
+  ASSERT_TRUE(atomic_flush_called);
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+
+  // Verify data after flush.
+  ASSERT_EQ("val0", Get(0, "key0"));
+  ASSERT_EQ("val1", Get(1, "key1"));
+  ASSERT_EQ("val2", Get(2, "key2"));
+
+  // Also test single-CF Flush with force_atomic_flush.
+  ASSERT_OK(Put(0, "key0_2", "val0_2"));
+  atomic_flush_called = false;
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::AtomicFlushMemTables:AfterScheduleFlush",
+      [&](void* /*arg*/) { atomic_flush_called = true; });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(db_->Flush(flush_opts, handles_[0]));
+  ASSERT_TRUE(atomic_flush_called);
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+
+  ASSERT_EQ("val0_2", Get(0, "key0_2"));
+}
+
+TEST_F(CheckpointTest, DBFlushWithForceAtomicFlush) {
+  Options options = CurrentOptions();
+  options.atomic_flush = false;
+  CreateAndReopenWithCF({"one", "two"}, options);
+
+  ASSERT_OK(Put(0, "key0", "val0"));
+  ASSERT_OK(Put(1, "key1", "val1"));
+  ASSERT_OK(Put(2, "key2", "val2"));
+
+  bool atomic_flush_called = false;
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::AtomicFlushMemTables:AfterScheduleFlush",
+      [&](void*) { atomic_flush_called = true; });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  FlushOptions flush_opts;
+  flush_opts.force_atomic_flush = true;
+  ASSERT_OK(db_->Flush(flush_opts, handles_));
+  ASSERT_TRUE(atomic_flush_called);
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+
+  ASSERT_EQ("val0", Get(0, "key0"));
+  ASSERT_EQ("val1", Get(1, "key1"));
+  ASSERT_EQ("val2", Get(2, "key2"));
+
+  // Single-CF Flush with force_atomic_flush.
+  ASSERT_OK(Put(0, "key0_2", "val0_2"));
+  atomic_flush_called = false;
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::AtomicFlushMemTables:AfterScheduleFlush",
+      [&](void*) { atomic_flush_called = true; });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(db_->Flush(flush_opts, handles_[0]));
+  ASSERT_TRUE(atomic_flush_called);
+
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
+
+  ASSERT_EQ("val0_2", Get(0, "key0_2"));
+}
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
