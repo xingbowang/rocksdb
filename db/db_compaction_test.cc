@@ -560,6 +560,7 @@ TEST_F(DBCompactionTest, UniversalReduceFileLockingRepickNothing) {
   ASSERT_OK(Flush());
   ASSERT_OK(dbfull()->TEST_WaitForCompact());
   ASSERT_TRUE(bottom_pri_compaction_attempt_repick);
+  Env::Default()->SetBackgroundThreads(0, Env::Priority::BOTTOM);
 }
 
 TEST_F(DBCompactionTest, SkipStatsUpdateTest) {
