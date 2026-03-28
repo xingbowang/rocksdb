@@ -340,8 +340,15 @@ Status TrieIndexIterator::SeekAndGetResult(const Slice& target,
   if (has_seqno_encoding_ && iter_.Valid()) {
     uint64_t leaf_idx = iter_.LeafIndex();
     uint64_t leaf_seqno = trie_->GetLeafSeqno(leaf_idx);
+    bool advance_to_next_block = false;
+    if (leaf_seqno != 0) {
+      const bool target_matches_separator =
+          comparator_->Compare(target, result->key) == 0;
+      advance_to_next_block =
+          target_matches_separator && target_seq < leaf_seqno;
+    }
 
-    if (leaf_seqno != 0 && target_seq < leaf_seqno) {
+    if (advance_to_next_block) {
       // Target's internal key is AFTER the separator (lower seqno = later
       // in internal key order for same user key). Advance through overflow
       // blocks.
