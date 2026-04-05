@@ -301,6 +301,11 @@ struct rocksdb_walfilter_t : public WalFilter {
   rocksdb_walfilter_log_record_found_cb log_record_found_ = nullptr;
   const char* (*name_)(void*) = nullptr;
 
+  rocksdb_walfilter_t() = default;
+  rocksdb_walfilter_t(const rocksdb_walfilter_t&) = delete;
+  rocksdb_walfilter_t& operator=(const rocksdb_walfilter_t&) = delete;
+  rocksdb_walfilter_t(rocksdb_walfilter_t&&) = delete;
+  rocksdb_walfilter_t& operator=(rocksdb_walfilter_t&&) = delete;
   ~rocksdb_walfilter_t() override { (*destructor_)(state_); }
 
   void ColumnFamilyLogNumberMap(
@@ -418,10 +423,11 @@ struct rocksdb_readoptions_t {
     table_filter_callback = callback;
     if (callback != nullptr) {
       auto cb = table_filter_callback;
-      auto state = table_filter_state;
-      rep.table_filter = [cb, state](const TableProperties& props) {
-        return cb(state, reinterpret_cast<const rocksdb_table_properties_t*>(
-                             &props)) != 0;
+      auto filter_state = table_filter_state;
+      rep.table_filter = [cb, filter_state](const TableProperties& props) {
+        return cb(filter_state,
+                  reinterpret_cast<const rocksdb_table_properties_t*>(
+                      &props)) != 0;
       };
     }
   }
@@ -1894,6 +1900,7 @@ rocksdb_t* rocksdb_open_and_trim_history(
     rocksdb_column_family_handle_t** column_family_handles, char* trim_ts,
     size_t trim_tslen, char** errptr) {
   std::vector<ColumnFamilyDescriptor> column_families;
+  column_families.reserve(num_column_families);
   for (int i = 0; i < num_column_families; i++) {
     column_families.emplace_back(
         std::string(column_family_names[i]),
@@ -3051,6 +3058,7 @@ void rocksdb_flush_cfs(rocksdb_t* db, const rocksdb_flushoptions_t* options,
                        rocksdb_column_family_handle_t** column_families,
                        int num_column_families, char** errptr) {
   std::vector<ColumnFamilyHandle*> column_family_handles;
+  column_family_handles.reserve(num_column_families);
   for (int i = 0; i < num_column_families; i++) {
     column_family_handles.push_back(column_families[i]->rep);
   }
