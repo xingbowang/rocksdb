@@ -200,9 +200,14 @@ using std::unordered_set;
 using std::vector;
 
 template <typename MapType>
+// Returns iterator to the element at position `pos`, or cend() if out of
+// bounds. NOTE: O(n) per call due to std::advance on non-random-access
+// iterators (std::map). Callers iterating the full map are O(n^2).
 static typename MapType::const_iterator GetMapEntryAt(const MapType& map,
                                                       size_t pos) {
-  assert(pos < map.size());
+  if (pos >= map.size()) {
+    return map.cend();
+  }
   auto it = map.cbegin();
   std::advance(it, pos);
   return it;
@@ -412,11 +417,11 @@ struct rocksdb_readoptions_t {
     table_filter_destructor = destructor;
     table_filter_callback = callback;
     if (callback != nullptr) {
-      rep.table_filter = [this](const TableProperties& props) {
-        return table_filter_callback(
-                   table_filter_state,
-                   reinterpret_cast<const rocksdb_table_properties_t*>(
-                       &props)) != 0;
+      auto cb = table_filter_callback;
+      auto state = table_filter_state;
+      rep.table_filter = [cb, state](const TableProperties& props) {
+        return cb(state, reinterpret_cast<const rocksdb_table_properties_t*>(
+                             &props)) != 0;
       };
     }
   }
@@ -1651,8 +1656,10 @@ void rocksdb_create_backup_options_set_progress_callback(
     options->rep.progress_callback = {};
     return;
   }
-  options->rep.progress_callback = [options]() {
-    options->progress_callback(options->progress_state);
+  auto progress_cb = callback;
+  auto progress_state = options->progress_state;
+  options->rep.progress_callback = [progress_cb, progress_state]() {
+    progress_cb(progress_state);
   };
 }
 
@@ -2706,6 +2713,9 @@ size_t rocksdb_wal_files_count(const rocksdb_wal_files_t* files) {
 
 const rocksdb_wal_file_t* rocksdb_wal_files_get_wal_file(
     const rocksdb_wal_files_t* files, size_t index) {
+  if (index >= files->rep.size()) {
+    return nullptr;
+  }
   return &files->rep[index];
 }
 
