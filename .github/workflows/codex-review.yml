@@ -1,22 +1,21 @@
-# Claude Code Review — Analysis Workflow
+# Codex Code Review — Analysis Workflow
 #
-# This workflow runs Claude to review PRs. It produces a markdown review
+# This workflow runs Codex to review PRs. It produces a markdown review
 # as an artifact but does NOT post comments (no write permissions).
-# The companion workflow (claude-review-comment.yml) handles posting.
+# The companion workflow (codex-review-comment.yml) handles posting.
 #
 # Triggers:
 #   1. workflow_run: Auto-review after pr-jobs passes
-#   2. issue_comment: Manual /claude-review or /claude-query by maintainers
+#   2. issue_comment: Manual /codex-review or /codex-query by maintainers
 #   3. workflow_dispatch: Manual testing
 #
 # Security:
 #   - This job has contents:read ONLY (no PR write, no issue write)
-#   - ANTHROPIC_API_KEY is used here but never coexists with write tokens
-#   - Claude uses read-only tools (View, GlobTool, GrepTool) plus Write
-#     (only for incremental findings file, not repo modifications)
+#   - OPENAI_API_KEY is used here but never coexists with write tokens
+#   - Codex runs in the checked-out repo and only writes review artifacts
 #   - Review methodology: claude_md/code_review.md
 
-name: Claude Code Review
+name: Codex Code Review
 
 on:
   # Late trigger: full pr-jobs workflow finished. Acts as a fallback if the
@@ -43,14 +42,14 @@ on:
         required: true
         type: number
       model:
-        description: Claude model to use (defaults to latest Opus)
+        description: Codex model to use
         required: false
         type: choice
         options:
-          - claude-opus-4-7
-          - claude-opus-4-6
-          - claude-sonnet-4-6
-        default: claude-opus-4-7
+          - gpt-5.3-codex
+          - gpt-5.4
+          - gpt-5.2-codex
+        default: gpt-5.3-codex
       thinking_budget:
         description: Override MAX_THINKING_TOKENS (blank = auto-classify)
         required: false
@@ -63,7 +62,7 @@ permissions:
 jobs:
   # ======================== Auto Review ======================== #
   auto-review:
-    name: Auto Claude Review
+    name: Auto Codex Review
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -71,11 +70,6 @@ jobs:
       checks: read
       pull-requests: read
 
-    # Accept three sources:
-    #   1. workflow_run (fallback after pr-jobs completes successfully)
-    #   2. check_run.completed (early trigger; gate logic in pr_info step
-    #      decides whether to actually proceed). Only consider 'success'
-    #      conclusions and skip our own check runs to avoid feedback loops.
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.conclusion == 'success' &&
@@ -83,7 +77,7 @@ jobs:
       (github.event_name == 'check_run' &&
        github.event.check_run.status == 'completed' &&
        github.event.check_run.conclusion == 'success' &&
-       !contains(github.event.check_run.name, 'Claude'))
+       !contains(github.event.check_run.name, 'Codex'))
 
     steps:
       - name: Get PR info and apply early-trigger gate
@@ -92,20 +86,10 @@ jobs:
         with:
           script: |
             const isCheckRun = context.eventName === 'check_run';
-
-            // ── 1. Resolve head SHA from whichever event fired ──
             const headSha = isCheckRun
               ? context.payload.check_run.head_sha
               : context.payload.workflow_run.head_sha;
 
-            // ── 2. Early-trigger gate (only for check_run events) ──
-            //   - Denominator must be ≥ MIN_CHECKS to avoid race conditions
-            //     where only a handful of checks have been registered.
-            //   - 0 failures (any failure means we shouldn't optimistically
-            //     run the review yet — wait for the workflow_run fallback).
-            //   - succeeded / total ≥ THRESHOLD.
-            //   - Filter out our own Claude review check runs to break the
-            //     feedback loop.
             if (isCheckRun) {
               const MIN_CHECKS = 10;
               const THRESHOLD = 0.5;
@@ -122,9 +106,8 @@ jobs:
                   per_page: 100,
                 }
               );
-              // Exclude our own Claude review jobs from the denominator.
               const checks = all.filter(c =>
-                !(c.name && c.name.toLowerCase().includes('claude')));
+                !(c.name && c.name.toLowerCase().includes('codex')));
               const total = checks.length;
               const succeeded = checks.filter(c =>
                 c.status === 'completed' && c.conclusion === 'success'
@@ -168,7 +151,6 @@ jobs:
                 `Proceeding with early review.`);
             }
 
-            // ── 3. Resolve PR number ──
             let prNumber = null;
             const prsFromEvent = isCheckRun
               ? (context.payload.check_run.pull_requests || [])
@@ -176,8 +158,6 @@ jobs:
             if (prsFromEvent && prsFromEvent.length > 0) {
               prNumber = prsFromEvent[0].number;
             } else {
-              // PR may not be registered yet if push and PR creation raced.
-              // Retry up to 5 times with 10s delay.
               for (let attempt = 0; attempt < 5; attempt++) {
                 if (attempt > 0) {
                   core.info(`PR not found for SHA ${headSha}, retrying in 10s (attempt ${attempt + 1}/5)...`);
@@ -248,9 +228,7 @@ jobs:
               per_page: 100
             });
             const shortSha = process.env.HEAD_SHA.substring(0, 7);
-            // Skip if there's already an auto-review comment for THIS commit.
-            // (Each commit gets its own comment, so we key on the SHA marker.)
-            const marker = `<!-- claude-review-auto-${shortSha} -->`;
+            const marker = `<!-- codex-review-auto-${shortSha} -->`;
             const existing = comments.data.find(c => c.body.includes(marker));
             core.setOutput('skip', existing ? 'true' : 'false');
 
@@ -261,6 +239,18 @@ jobs:
           ref: ${{ steps.pr_info.outputs.base_ref }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Setup Node.js
+        if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Codex CLI
+        if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        run: |
+          npm install -g @openai/codex
+          codex --version
 
       - name: Generate diff and prompt
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
@@ -317,123 +307,124 @@ jobs:
           printf '\n## Diff (truncated to 30KB)\n\n' >> /tmp/complexity_prompt.txt
           head -c 30000 /tmp/pr.diff >> /tmp/complexity_prompt.txt
 
-      - name: Classify PR complexity (Sonnet)
+      - name: Classify PR complexity
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
-        id: classify
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: /tmp/complexity_prompt.txt
-          model: claude-sonnet-4-6
-          max_turns: "10"
-          timeout_minutes: "10"
-          allowed_tools: "View,GlobTool,GrepTool"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: /tmp/codex-home
+          CODEX_MODEL: gpt-5.3-codex
+        run: |
+          mkdir -p "${CODEX_HOME}"
+          codex exec \
+            -m "${CODEX_MODEL}" \
+            -c model_reasoning_effort="medium" \
+            --dangerously-bypass-approvals-and-sandbox \
+            --output-last-message codex-complexity-output.txt \
+            - < /tmp/complexity_prompt.txt > codex-complexity.log 2>&1
 
       - name: Pick thinking budget
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
         id: budget
-        env:
-          EXECUTION_FILE: ${{ steps.classify.outputs.execution_file }}
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            // Defaults: simple = xhigh (16k), complex = max (32k).
-            // Default to "complex" if classification is unreadable.
             let label = 'complex';
             try {
-              const log = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
-              const result = log.find(m => m.type === 'result');
-              const text = (result && result.result) ? result.result.trim().toLowerCase() : '';
+              const text = fs.readFileSync('codex-complexity-output.txt', 'utf8').trim().toLowerCase();
               if (/\bsimple\b/.test(text) && !/\bcomplex\b/.test(text)) {
                 label = 'simple';
               }
             } catch (e) {
               core.warning(`Could not parse classifier output: ${e.message}`);
             }
-            const budget = label === 'simple' ? '16000' : '32000';
-            core.info(`Complexity classified as: ${label} → MAX_THINKING_TOKENS=${budget}`);
+            const effort = label === 'simple' ? 'high' : 'xhigh';
+            core.info(`Complexity classified as: ${label} → model_reasoning_effort=${effort}`);
             core.setOutput('label', label);
-            core.setOutput('tokens', budget);
+            core.setOutput('effort', effort);
 
-      - name: Run Claude
+      - name: Run Codex
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
-        id: claude
+        id: codex
         env:
-          MAX_THINKING_TOKENS: ${{ steps.budget.outputs.tokens }}
-          CLAUDE_COMPLEXITY: ${{ steps.budget.outputs.label }}
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: /tmp/prompt.txt
-          model: claude-opus-4-7
-          max_turns: "300"
-          timeout_minutes: "60"
-          allowed_tools: "View,GlobTool,GrepTool,Write,Task"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: /tmp/codex-home
+          CODEX_MODEL: gpt-5.3-codex
+          CODEX_REASONING_EFFORT: ${{ steps.budget.outputs.effort }}
+          BASE_SHA: ${{ steps.pr_info.outputs.base_sha }}
+          PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
+        run: |
+          mkdir -p "${CODEX_HOME}"
+          set +e
+          codex exec review \
+            --base "${BASE_SHA}" \
+            --title "${PR_TITLE}" \
+            -m "${CODEX_MODEL}" \
+            -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
+            --dangerously-bypass-approvals-and-sandbox \
+            --output-last-message codex-review-output.md \
+            - < /tmp/prompt.txt > codex-review-execution.log 2>&1
+          exit_code=$?
+          set -e
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          echo "${exit_code}" > codex-review-exit-code.txt
 
-      - name: Recover partial review on turn limit
-        if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
-        id: recover
-        uses: actions/github-script@v7
-        env:
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-        with:
-          script: |
-            const fs = require('fs');
-            const log = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
-            const result = log.find(m => m.type === 'result');
-            const hitLimit = result && result.subtype === 'error_max_turns';
-            const hasFindings = fs.existsSync('review-findings.md');
-            core.setOutput('hit_limit', hitLimit ? 'true' : 'false');
-            core.setOutput('has_findings', hasFindings ? 'true' : 'false');
-            core.setOutput('needs_recovery', (hitLimit && hasFindings) ? 'true' : 'false');
-
-      - name: Format partial findings
+      - name: Recover partial review
         if: >-
           steps.pr_info.outputs.skip != 'true' &&
           steps.check_existing.outputs.skip != 'true' &&
-          steps.recover.outputs.needs_recovery == 'true'
-        id: format_recovery
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: claude_md/ci_recovery_prompt.md
-          model: claude-sonnet-4-6
-          max_turns: "10"
-          allowed_tools: "View,GlobTool,GrepTool"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          steps.codex.outputs.exit_code != '0' &&
+          hashFiles('review-findings.md') != ''
+        id: recover
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: /tmp/codex-home
+          CODEX_MODEL: gpt-5.3-codex
+          CODEX_REASONING_EFFORT: ${{ steps.budget.outputs.effort }}
+        run: |
+          set +e
+          codex exec \
+            -m "${CODEX_MODEL}" \
+            -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
+            --dangerously-bypass-approvals-and-sandbox \
+            --output-last-message codex-review-recovery.md \
+            - < claude_md/ci_recovery_prompt.md > codex-review-recovery.log 2>&1
+          exit_code=$?
+          set -e
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
 
       - name: Build review comment
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
         uses: actions/github-script@v7
         env:
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-          RECOVERY_FILE: ${{ steps.format_recovery.outputs.execution_file }}
-          CONCLUSION: ${{ steps.claude.outputs.conclusion }}
+          RESPONSE_FILE: codex-review-output.md
+          RECOVERY_FILE: codex-review-recovery.md
+          FINDINGS_FILE: review-findings.md
+          LOG_FILE: codex-review-execution.log
+          EXIT_CODE: ${{ steps.codex.outputs.exit_code }}
           HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
-          NEEDS_RECOVERY: ${{ steps.recover.outputs.needs_recovery }}
+          USED_RECOVERY: ${{ steps.recover.outputs.exit_code == '0' && 'true' || 'false' }}
         with:
           script: |
-            const parse = require('./.github/scripts/parse-claude-review.js');
+            const parse = require('./.github/scripts/parse-codex-review.js');
             const fs = require('fs');
-            let execFile = process.env.EXECUTION_FILE;
-            if (process.env.NEEDS_RECOVERY === 'true') {
-              const rf = process.env.RECOVERY_FILE;
-              if (rf && fs.existsSync(rf)) {
-                execFile = rf;
-              }
-            }
             const body = parse({
-              executionFile: execFile,
-              conclusion: process.env.CONCLUSION,
+              responseFile: process.env.RESPONSE_FILE,
+              recoveryFile: process.env.RECOVERY_FILE,
+              findingsFile: process.env.FINDINGS_FILE,
+              logFile: process.env.LOG_FILE,
+              exitCode: process.env.EXIT_CODE,
               meta: {
                 trigger: 'auto',
                 headSha: process.env.HEAD_SHA,
                 reviewer: '',
                 isQuery: false,
-                isPartial: process.env.NEEDS_RECOVERY === 'true',
+                isPartial: process.env.USED_RECOVERY === 'true' ||
+                  (!fs.existsSync(process.env.RESPONSE_FILE) &&
+                   fs.existsSync(process.env.FINDINGS_FILE)),
               }
             });
-            fs.writeFileSync('claude-review-comment.md', body);
+            fs.writeFileSync('codex-review-comment.md', body);
 
       - name: Save PR number
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
@@ -449,36 +440,35 @@ jobs:
         if: always() && steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-result
+          name: codex-review-result
           path: |
-            claude-review-comment.md
+            codex-review-comment.md
             pr_number.txt
             trigger_type.txt
             head_sha.txt
           if-no-files-found: ignore
           retention-days: 1
 
-      - name: Upload execution log
+      - name: Upload review logs
         if: always() && steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-execution-log
-          path: ${{ steps.claude.outputs.execution_file }}
-          retention-days: 7
-          if-no-files-found: warn
-
-      - name: Upload recovery execution log
-        if: always() && steps.pr_info.outputs.skip != 'true' && steps.recover.outputs.needs_recovery == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: claude-review-recovery-log
-          path: ${{ steps.format_recovery.outputs.execution_file }}
+          name: codex-review-logs
+          path: |
+            codex-review-execution.log
+            codex-complexity.log
+            codex-complexity-output.txt
+            codex-review-recovery.log
+            codex-review-output.md
+            codex-review-recovery.md
+            review-findings.md
+            codex-review-exit-code.txt
           retention-days: 7
           if-no-files-found: ignore
 
   # ======================== Manual Review ======================== #
   manual-review:
-    name: Manual Claude Review
+    name: Manual Codex Review
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -488,7 +478,7 @@ jobs:
       (
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
-        (contains(github.event.comment.body, '/claude-review') || contains(github.event.comment.body, '/claude-query')) &&
+        (contains(github.event.comment.body, '/codex-review') || contains(github.event.comment.body, '/codex-query')) &&
         contains(fromJSON('["pdillinger", "jaykorean", "hx235", "dannyhchen", "joshkang97", "zaidoon1", "omkarhgawde", "xingbowang", "anand1976", "virajthakur", "nmk70", "archang19", "mszeszko-meta", "yoshinorim", "cbi42"]'), github.event.comment.user.login)
       )
 
@@ -504,15 +494,15 @@ jobs:
               return;
             }
             const body = context.payload.comment.body;
-            if (body.includes('/claude-review')) {
+            if (body.includes('/codex-review')) {
               core.setOutput('type', 'review');
-              const match = body.match(/\/claude-review\s+([\s\S]*)/);
+              const match = body.match(/\/codex-review\s+([\s\S]*)/);
               core.setOutput('query', match ? match[1].trim() : '');
-            } else if (body.includes('/claude-query')) {
-              const match = body.match(/\/claude-query\s+([\s\S]*)/);
+            } else if (body.includes('/codex-query')) {
+              const match = body.match(/\/codex-query\s+([\s\S]*)/);
               const query = match ? match[1].trim() : '';
               if (!query) {
-                core.setFailed('No query provided. Usage: /claude-query <your question>');
+                core.setFailed('No query provided. Usage: /codex-query <your question>');
                 return;
               }
               core.setOutput('type', 'query');
@@ -555,6 +545,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Codex CLI
+        run: |
+          npm install -g @openai/codex
+          codex --version
+
       - name: Generate diff and prompt
         env:
           HEAD_REPO: ${{ steps.pr_info.outputs.head_repo }}
@@ -564,7 +564,6 @@ jobs:
           PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
           PR_BODY: ${{ steps.pr_info.outputs.pr_body }}
           PR_AUTHOR: ${{ steps.pr_info.outputs.pr_author }}
-          DIFF_STATS: ""
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
           ADDITIONAL_CONTEXT: ${{ steps.command.outputs.query }}
           USER_QUERY: ${{ steps.command.outputs.query }}
@@ -584,7 +583,6 @@ jobs:
           fi
 
           if [ "${COMMAND_TYPE}" = "query" ]; then
-            # Query prompt
             cat claude_md/ci_query_prompt.md > /tmp/prompt.txt
             printf '\n---\n\n' >> /tmp/prompt.txt
 
@@ -602,7 +600,6 @@ jobs:
             printf '\n---\n## PR Diff (for reference)\n' >> /tmp/prompt.txt
             cat /tmp/pr.diff >> /tmp/prompt.txt
           else
-            # Review prompt
             cat claude_md/ci_review_prompt.md > /tmp/prompt.txt
 
             cat >> /tmp/prompt.txt << PROMPT_EOF
@@ -643,139 +640,149 @@ jobs:
           printf '\n## Diff (truncated to 30KB)\n\n' >> /tmp/complexity_prompt.txt
           head -c 30000 /tmp/pr.diff >> /tmp/complexity_prompt.txt
 
-      - name: Classify PR complexity (Sonnet)
+      - name: Classify PR complexity
         if: steps.command.outputs.type == 'review'
-        id: classify
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: /tmp/complexity_prompt.txt
-          model: claude-sonnet-4-6
-          max_turns: "10"
-          timeout_minutes: "10"
-          allowed_tools: "View,GlobTool,GrepTool"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: /tmp/codex-home
+          CODEX_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'gpt-5.3-codex' }}
+        run: |
+          mkdir -p "${CODEX_HOME}"
+          codex exec \
+            -m "${CODEX_MODEL}" \
+            -c model_reasoning_effort="medium" \
+            --dangerously-bypass-approvals-and-sandbox \
+            --output-last-message codex-complexity-output.txt \
+            - < /tmp/complexity_prompt.txt > codex-complexity.log 2>&1
 
       - name: Pick thinking budget
         id: budget
         env:
-          EXECUTION_FILE: ${{ steps.classify.outputs.execution_file }}
           OVERRIDE: ${{ inputs.thinking_budget }}
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            // Queries skip the classifier and use a moderate budget.
             if (process.env.COMMAND_TYPE !== 'review') {
               core.setOutput('label', 'query');
-              core.setOutput('tokens', '8000');
+              core.setOutput('effort', 'medium');
               return;
             }
-            // Manual override takes precedence.
             const override = (process.env.OVERRIDE || '').trim();
             if (override && /^\d+$/.test(override)) {
-              core.info(`Using thinking_budget override: ${override}`);
+              const budget = parseInt(override, 10);
+              const effort = budget >= 32000 ? 'xhigh' : 'high';
+              core.info(`Using thinking_budget override: ${override} → model_reasoning_effort=${effort}`);
               core.setOutput('label', 'override');
-              core.setOutput('tokens', override);
+              core.setOutput('effort', effort);
               return;
             }
             let label = 'complex';
             try {
-              const log = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
-              const result = log.find(m => m.type === 'result');
-              const text = (result && result.result) ? result.result.trim().toLowerCase() : '';
+              const text = fs.readFileSync('codex-complexity-output.txt', 'utf8').trim().toLowerCase();
               if (/\bsimple\b/.test(text) && !/\bcomplex\b/.test(text)) {
                 label = 'simple';
               }
             } catch (e) {
               core.warning(`Could not parse classifier output: ${e.message}`);
             }
-            const budget = label === 'simple' ? '16000' : '32000';
-            core.info(`Complexity classified as: ${label} → MAX_THINKING_TOKENS=${budget}`);
+            const effort = label === 'simple' ? 'high' : 'xhigh';
+            core.info(`Complexity classified as: ${label} → model_reasoning_effort=${effort}`);
             core.setOutput('label', label);
-            core.setOutput('tokens', budget);
+            core.setOutput('effort', effort);
 
-      - name: Run Claude
-        id: claude
+      - name: Run Codex
+        id: codex
         env:
-          MAX_THINKING_TOKENS: ${{ steps.budget.outputs.tokens }}
-          CLAUDE_COMPLEXITY: ${{ steps.budget.outputs.label }}
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: /tmp/prompt.txt
-          model: ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'claude-opus-4-7' }}
-          max_turns: "300"
-          timeout_minutes: "60"
-          allowed_tools: "View,GlobTool,GrepTool,Write,Task"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-
-      - name: Recover partial review on turn limit
-        id: recover
-        uses: actions/github-script@v7
-        env:
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: /tmp/codex-home
+          CODEX_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'gpt-5.3-codex' }}
+          CODEX_REASONING_EFFORT: ${{ steps.budget.outputs.effort }}
+          BASE_SHA: ${{ steps.pr_info.outputs.base_sha }}
+          PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
-        with:
-          script: |
-            const fs = require('fs');
-            // Skip recovery for queries — only reviews use incremental findings
-            if (process.env.COMMAND_TYPE === 'query') {
-              core.setOutput('needs_recovery', 'false');
-              return;
-            }
-            const log = JSON.parse(fs.readFileSync(process.env.EXECUTION_FILE, 'utf8'));
-            const result = log.find(m => m.type === 'result');
-            const hitLimit = result && result.subtype === 'error_max_turns';
-            const hasFindings = fs.existsSync('review-findings.md');
-            core.setOutput('hit_limit', hitLimit ? 'true' : 'false');
-            core.setOutput('has_findings', hasFindings ? 'true' : 'false');
-            core.setOutput('needs_recovery', (hitLimit && hasFindings) ? 'true' : 'false');
+        run: |
+          mkdir -p "${CODEX_HOME}"
+          set +e
+          if [ "${COMMAND_TYPE}" = "query" ]; then
+            codex exec \
+              -m "${CODEX_MODEL}" \
+              -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
+              --dangerously-bypass-approvals-and-sandbox \
+              --output-last-message codex-review-output.md \
+              - < /tmp/prompt.txt > codex-review-execution.log 2>&1
+          else
+            codex exec review \
+              --base "${BASE_SHA}" \
+              --title "${PR_TITLE}" \
+              -m "${CODEX_MODEL}" \
+              -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
+              --dangerously-bypass-approvals-and-sandbox \
+              --output-last-message codex-review-output.md \
+              - < /tmp/prompt.txt > codex-review-execution.log 2>&1
+          fi
+          exit_code=$?
+          set -e
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          echo "${exit_code}" > codex-review-exit-code.txt
 
-      - name: Format partial findings
-        if: steps.recover.outputs.needs_recovery == 'true'
-        id: format_recovery
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: claude_md/ci_recovery_prompt.md
-          model: claude-sonnet-4-6
-          max_turns: "10"
-          allowed_tools: "View,GlobTool,GrepTool"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Recover partial review
+        if: >-
+          steps.command.outputs.type == 'review' &&
+          steps.codex.outputs.exit_code != '0' &&
+          hashFiles('review-findings.md') != ''
+        id: recover
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: /tmp/codex-home
+          CODEX_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'gpt-5.3-codex' }}
+          CODEX_REASONING_EFFORT: ${{ steps.budget.outputs.effort }}
+        run: |
+          set +e
+          codex exec \
+            -m "${CODEX_MODEL}" \
+            -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
+            --dangerously-bypass-approvals-and-sandbox \
+            --output-last-message codex-review-recovery.md \
+            - < claude_md/ci_recovery_prompt.md > codex-review-recovery.log 2>&1
+          exit_code=$?
+          set -e
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
 
       - name: Build review comment
         uses: actions/github-script@v7
         env:
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
-          RECOVERY_FILE: ${{ steps.format_recovery.outputs.execution_file }}
-          CONCLUSION: ${{ steps.claude.outputs.conclusion }}
+          RESPONSE_FILE: codex-review-output.md
+          RECOVERY_FILE: codex-review-recovery.md
+          FINDINGS_FILE: review-findings.md
+          LOG_FILE: codex-review-execution.log
+          EXIT_CODE: ${{ steps.codex.outputs.exit_code }}
           HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
           REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
-          NEEDS_RECOVERY: ${{ steps.recover.outputs.needs_recovery }}
+          USED_RECOVERY: ${{ steps.recover.outputs.exit_code == '0' && 'true' || 'false' }}
         with:
           script: |
-            const parse = require('./.github/scripts/parse-claude-review.js');
+            const parse = require('./.github/scripts/parse-codex-review.js');
             const fs = require('fs');
-            const isReview = process.env.COMMAND_TYPE === 'review';
-            let execFile = process.env.EXECUTION_FILE;
-            if (process.env.NEEDS_RECOVERY === 'true') {
-              const rf = process.env.RECOVERY_FILE;
-              if (rf && fs.existsSync(rf)) {
-                execFile = rf;
-              }
-            }
             const body = parse({
-              executionFile: execFile,
-              conclusion: process.env.CONCLUSION,
+              responseFile: process.env.RESPONSE_FILE,
+              recoveryFile: process.env.RECOVERY_FILE,
+              findingsFile: process.env.FINDINGS_FILE,
+              logFile: process.env.LOG_FILE,
+              exitCode: process.env.EXIT_CODE,
               meta: {
                 trigger: 'manual',
                 headSha: process.env.HEAD_SHA,
                 reviewer: process.env.REVIEWER,
-                isQuery: !isReview,
-                isPartial: process.env.NEEDS_RECOVERY === 'true',
+                isQuery: process.env.COMMAND_TYPE !== 'review',
+                isPartial: process.env.USED_RECOVERY === 'true' ||
+                  (!fs.existsSync(process.env.RESPONSE_FILE) &&
+                   fs.existsSync(process.env.FINDINGS_FILE)),
               }
             });
-            fs.writeFileSync('claude-review-comment.md', body);
+            fs.writeFileSync('codex-review-comment.md', body);
 
       - name: Save PR number
         run: echo "${{ steps.pr_info.outputs.pr_number }}" > pr_number.txt
@@ -795,9 +802,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-result
+          name: codex-review-result
           path: |
-            claude-review-comment.md
+            codex-review-comment.md
             pr_number.txt
             trigger_type.txt
             reviewer.txt
@@ -806,20 +813,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-      - name: Upload execution log
+      - name: Upload review logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: claude-review-execution-log
-          path: ${{ steps.claude.outputs.execution_file }}
-          retention-days: 7
-          if-no-files-found: warn
-
-      - name: Upload recovery execution log
-        if: always() && steps.recover.outputs.needs_recovery == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: claude-review-recovery-log
-          path: ${{ steps.format_recovery.outputs.execution_file }}
+          name: codex-review-logs
+          path: |
+            codex-review-execution.log
+            codex-complexity.log
+            codex-complexity-output.txt
+            codex-review-recovery.log
+            codex-review-output.md
+            codex-review-recovery.md
+            review-findings.md
+            codex-review-exit-code.txt
           retention-days: 7
           if-no-files-found: ignore
