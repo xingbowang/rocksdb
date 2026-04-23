@@ -8,12 +8,97 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include "table/block_based/block_based_table_iterator.h"
 
+#include <cstring>
+
+#include "cache/charged_cache.h"
+#include "cache/lru_cache.h"
+
 namespace ROCKSDB_NAMESPACE {
+
+namespace {
+
+void ReleasePinnedBlockCacheHandle(void* arg1, void* arg2) {
+  auto* cache = static_cast<Cache*>(arg1);
+  auto* cache_handle = static_cast<Cache::Handle*>(arg2);
+  assert(cache != nullptr);
+  assert(cache_handle != nullptr);
+  cache->Release(cache_handle);
+}
+
+size_t GetPinnedBlockCacheUsage(Cache* cache, Cache::Handle* cache_handle) {
+  assert(cache != nullptr);
+  assert(cache_handle != nullptr);
+
+  if (std::strcmp(cache->Name(), ChargedCache::kClassName()) == 0) {
+    return GetPinnedBlockCacheUsage(
+        static_cast<ChargedCache*>(cache)->GetCache(), cache_handle);
+  }
+
+  if (std::strcmp(cache->Name(), "LRUCache") == 0) {
+    // LRUCache::GetCharge() strips metadata, but GetPinnedUsage() charges the
+    // full handle footprint. Use total_charge so API accounting matches the
+    // global pinned-usage accounting exposed by the cache.
+    return static_cast<const lru_cache::LRUHandle*>(cache_handle)->total_charge;
+  }
+
+  return cache->GetCharge(cache_handle);
+}
+
+}  // namespace
 
 void BlockBasedTableIterator::SeekToFirst() { SeekImpl(nullptr, false); }
 
 void BlockBasedTableIterator::Seek(const Slice& target) {
   SeekImpl(&target, true);
+}
+
+Status BlockBasedTableIterator::PinCurrentKeyValue(PinnedIterKeyValue* out) {
+  if (out == nullptr) {
+    return Status::InvalidArgument("PinnedIterKeyValue is nullptr");
+  }
+  out->Reset();
+  if (!Valid()) {
+    return Status::InvalidArgument("Iterator is not valid");
+  }
+  if (!PrepareValue()) {
+    return status();
+  }
+  if (!block_iter_points_to_real_block_ || !block_iter_.Valid()) {
+    return Status::NotSupported("Current entry is not backed by a data block");
+  }
+  // A cache handle is only useful here if the key/value slices still alias the
+  // cached block contents. If block contents are no longer pinned, returning
+  // slices into the block would be unsafe after iterator movement.
+  if (!block_iter_.IsValuePinned()) {
+    return Status::NotSupported(
+        "Current entry is not backed by pinned block contents");
+  }
+
+  Cache* block_cache = table_->get_rep()->table_options.block_cache.get();
+  Cache::Handle* cache_handle = block_iter_.cache_handle();
+  if (block_cache == nullptr || cache_handle == nullptr) {
+    return Status::NotSupported(
+        "Current entry is not backed by a block cache entry");
+  }
+  // Built-in caches always succeed here for a live cache handle. Keep the
+  // check as defensive compatibility with custom Cache implementations.
+  if (!block_cache->Ref(cache_handle)) {
+    return Status::TryAgain(
+        "Failed to reference current data block cache entry");
+  }
+
+  out->cleanup.Allocate();
+  out->cleanup->RegisterCleanup(&ReleasePinnedBlockCacheHandle, block_cache,
+                                cache_handle);
+  out->cleanup_dedupe_token = cache_handle;
+  out->key = block_iter_.key();
+  out->user_key = block_iter_.user_key();
+  out->value = block_iter_.value();
+  out->key_pinned = block_iter_.IsKeyPinned();
+  out->value_pinned = true;
+  out->pinned_block_cache_usage =
+      GetPinnedBlockCacheUsage(block_cache, cache_handle);
+  return Status::OK();
 }
 
 void BlockBasedTableIterator::SeekSecondPass(const Slice* target) {
