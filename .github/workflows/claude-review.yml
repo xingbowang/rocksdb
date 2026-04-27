@@ -262,6 +262,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout workflow support files
+        if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: workflow_support
+          sparse-checkout: |
+            .github/scripts
+            claude_md
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
       - name: Generate diff and prompt
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
         env:
@@ -272,6 +285,7 @@ jobs:
           PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
           PR_BODY: ${{ steps.pr_info.outputs.pr_body }}
           PR_AUTHOR: ${{ steps.pr_info.outputs.pr_author }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
           git remote add fork "${HEAD_REPO}" || true
           git fetch fork "${HEAD_REF}" --depth=100
@@ -287,7 +301,7 @@ jobs:
             IS_TRUNCATED=true
           fi
 
-          cat claude_md/ci_review_prompt.md > /tmp/prompt.txt
+          cat "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_review_prompt.md" > /tmp/prompt.txt
 
           printf '\n## Pull Request Information\n' >> /tmp/prompt.txt
           printf '%s\n' "- **Title:** ${PR_TITLE}" >> /tmp/prompt.txt
@@ -305,8 +319,10 @@ jobs:
 
       - name: Build complexity-classifier prompt
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        env:
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
-          cp claude_md/ci_complexity_eval_prompt.md /tmp/complexity_prompt.txt
+          cp "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_complexity_eval_prompt.md" /tmp/complexity_prompt.txt
           printf '\n---\n\n## Diff Summary\n\n' >> /tmp/complexity_prompt.txt
           git diff --stat "${{ steps.pr_info.outputs.base_sha }}...${{ steps.pr_info.outputs.head_sha }}" >> /tmp/complexity_prompt.txt
           printf '\n## Changed Files\n\n' >> /tmp/complexity_prompt.txt
@@ -393,7 +409,7 @@ jobs:
         id: format_recovery
         uses: anthropics/claude-code-base-action@beta
         with:
-          prompt_file: claude_md/ci_recovery_prompt.md
+          prompt_file: ${{ github.workspace }}/workflow_support/claude_md/ci_recovery_prompt.md
           model: claude-sonnet-4-6
           max_turns: "10"
           allowed_tools: "View,GlobTool,GrepTool"
@@ -408,9 +424,10 @@ jobs:
           CONCLUSION: ${{ steps.claude.outputs.conclusion }}
           HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
           NEEDS_RECOVERY: ${{ steps.recover.outputs.needs_recovery }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         with:
           script: |
-            const parse = require('./.github/scripts/parse-claude-review.js');
+            const parse = require(`${process.env.WORKFLOW_SUPPORT_DIR}/.github/scripts/parse-claude-review.js`);
             const fs = require('fs');
             let execFile = process.env.EXECUTION_FILE;
             if (process.env.NEEDS_RECOVERY === 'true') {
@@ -456,7 +473,11 @@ jobs:
           retention-days: 1
 
       - name: Upload execution log
-        if: always() && steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        if: >-
+          always() &&
+          steps.pr_info.outputs.skip != 'true' &&
+          steps.check_existing.outputs.skip != 'true' &&
+          steps.claude.outputs.execution_file != ''
         uses: actions/upload-artifact@v4
         with:
           name: claude-review-execution-log
@@ -465,7 +486,11 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload recovery execution log
-        if: always() && steps.pr_info.outputs.skip != 'true' && steps.recover.outputs.needs_recovery == 'true'
+        if: >-
+          always() &&
+          steps.pr_info.outputs.skip != 'true' &&
+          steps.recover.outputs.needs_recovery == 'true' &&
+          steps.format_recovery.outputs.execution_file != ''
         uses: actions/upload-artifact@v4
         with:
           name: claude-review-recovery-log
@@ -552,6 +577,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout workflow support files
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: workflow_support
+          sparse-checkout: |
+            .github/scripts
+            claude_md
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
       - name: Generate diff and prompt
         env:
           HEAD_REPO: ${{ steps.pr_info.outputs.head_repo }}
@@ -565,6 +602,7 @@ jobs:
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
           ADDITIONAL_CONTEXT: ${{ steps.command.outputs.query }}
           USER_QUERY: ${{ steps.command.outputs.query }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
           git remote add fork "${HEAD_REPO}" || true
           git fetch fork "${HEAD_REF}" --depth=100
@@ -582,7 +620,7 @@ jobs:
 
           if [ "${COMMAND_TYPE}" = "query" ]; then
             # Query prompt
-            cat claude_md/ci_query_prompt.md > /tmp/prompt.txt
+            cat "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_query_prompt.md" > /tmp/prompt.txt
             printf '\n---\n\n' >> /tmp/prompt.txt
 
             printf '## Pull Request Context\n' >> /tmp/prompt.txt
@@ -597,7 +635,7 @@ jobs:
             cat /tmp/pr.diff >> /tmp/prompt.txt
           else
             # Review prompt
-            cat claude_md/ci_review_prompt.md > /tmp/prompt.txt
+            cat "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_review_prompt.md" > /tmp/prompt.txt
 
             printf '\n## Pull Request Information\n' >> /tmp/prompt.txt
             printf '%s\n' "- **Title:** ${PR_TITLE}" >> /tmp/prompt.txt
@@ -625,8 +663,9 @@ jobs:
         env:
           BASE_SHA: ${{ steps.pr_info.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
-          cp claude_md/ci_complexity_eval_prompt.md /tmp/complexity_prompt.txt
+          cp "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_complexity_eval_prompt.md" /tmp/complexity_prompt.txt
           printf '\n---\n\n## Diff Summary\n\n' >> /tmp/complexity_prompt.txt
           git diff --stat "${BASE_SHA}...${HEAD_SHA}" >> /tmp/complexity_prompt.txt
           printf '\n## Changed Files\n\n' >> /tmp/complexity_prompt.txt
@@ -727,7 +766,7 @@ jobs:
         id: format_recovery
         uses: anthropics/claude-code-base-action@beta
         with:
-          prompt_file: claude_md/ci_recovery_prompt.md
+          prompt_file: ${{ github.workspace }}/workflow_support/claude_md/ci_recovery_prompt.md
           model: claude-sonnet-4-6
           max_turns: "10"
           allowed_tools: "View,GlobTool,GrepTool"
@@ -743,9 +782,10 @@ jobs:
           REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
           NEEDS_RECOVERY: ${{ steps.recover.outputs.needs_recovery }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         with:
           script: |
-            const parse = require('./.github/scripts/parse-claude-review.js');
+            const parse = require(`${process.env.WORKFLOW_SUPPORT_DIR}/.github/scripts/parse-claude-review.js`);
             const fs = require('fs');
             const isReview = process.env.COMMAND_TYPE === 'review';
             let execFile = process.env.EXECUTION_FILE;
@@ -798,7 +838,7 @@ jobs:
           retention-days: 1
 
       - name: Upload execution log
-        if: always()
+        if: always() && steps.claude.outputs.execution_file != ''
         uses: actions/upload-artifact@v4
         with:
           name: claude-review-execution-log
@@ -807,7 +847,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload recovery execution log
-        if: always() && steps.recover.outputs.needs_recovery == 'true'
+        if: >-
+          always() &&
+          steps.recover.outputs.needs_recovery == 'true' &&
+          steps.format_recovery.outputs.execution_file != ''
         uses: actions/upload-artifact@v4
         with:
           name: claude-review-recovery-log
