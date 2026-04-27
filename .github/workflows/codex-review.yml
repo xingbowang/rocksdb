@@ -240,6 +240,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout workflow support files
+        if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: workflow_support
+          sparse-checkout: |
+            .github/scripts
+            claude_md
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
       - name: Setup Node.js
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
         uses: actions/setup-node@v4
@@ -262,6 +275,7 @@ jobs:
           PR_TITLE: ${{ steps.pr_info.outputs.pr_title }}
           PR_BODY: ${{ steps.pr_info.outputs.pr_body }}
           PR_AUTHOR: ${{ steps.pr_info.outputs.pr_author }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
           git remote add fork "${HEAD_REPO}" || true
           git fetch fork "${HEAD_REF}" --depth=100
@@ -277,7 +291,7 @@ jobs:
             IS_TRUNCATED=true
           fi
 
-          cat claude_md/ci_review_prompt.md > /tmp/prompt.txt
+          cat "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_review_prompt.md" > /tmp/prompt.txt
 
           printf '\n## Pull Request Information\n' >> /tmp/prompt.txt
           printf '%s\n' "- **Title:** ${PR_TITLE}" >> /tmp/prompt.txt
@@ -295,8 +309,10 @@ jobs:
 
       - name: Build complexity-classifier prompt
         if: steps.pr_info.outputs.skip != 'true' && steps.check_existing.outputs.skip != 'true'
+        env:
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
-          cp claude_md/ci_complexity_eval_prompt.md /tmp/complexity_prompt.txt
+          cp "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_complexity_eval_prompt.md" /tmp/complexity_prompt.txt
           printf '\n---\n\n## Diff Summary\n\n' >> /tmp/complexity_prompt.txt
           git diff --stat "${{ steps.pr_info.outputs.base_sha }}...${{ steps.pr_info.outputs.head_sha }}" >> /tmp/complexity_prompt.txt
           printf '\n## Changed Files\n\n' >> /tmp/complexity_prompt.txt
@@ -378,6 +394,7 @@ jobs:
           CODEX_HOME: /tmp/codex-home
           CODEX_MODEL: gpt-5.3-codex
           CODEX_REASONING_EFFORT: ${{ steps.budget.outputs.effort }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
           set +e
           codex exec \
@@ -385,7 +402,7 @@ jobs:
             -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
             --dangerously-bypass-approvals-and-sandbox \
             --output-last-message codex-review-recovery.md \
-            - < claude_md/ci_recovery_prompt.md > codex-review-recovery.log 2>&1
+            - < "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_recovery_prompt.md" > codex-review-recovery.log 2>&1
           exit_code=$?
           set -e
           echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
@@ -401,9 +418,10 @@ jobs:
           EXIT_CODE: ${{ steps.codex.outputs.exit_code }}
           HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
           USED_RECOVERY: ${{ steps.recover.outputs.exit_code == '0' && 'true' || 'false' }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         with:
           script: |
-            const parse = require('./.github/scripts/parse-codex-review.js');
+            const parse = require(`${process.env.WORKFLOW_SUPPORT_DIR}/.github/scripts/parse-codex-review.js`);
             const fs = require('fs');
             const body = parse({
               responseFile: process.env.RESPONSE_FILE,
@@ -542,6 +560,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout workflow support files
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          path: workflow_support
+          sparse-checkout: |
+            .github/scripts
+            claude_md
+          sparse-checkout-cone-mode: true
+          persist-credentials: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -564,6 +594,7 @@ jobs:
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
           ADDITIONAL_CONTEXT: ${{ steps.command.outputs.query }}
           USER_QUERY: ${{ steps.command.outputs.query }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
           git remote add fork "${HEAD_REPO}" || true
           git fetch fork "${HEAD_REF}" --depth=100
@@ -580,7 +611,7 @@ jobs:
           fi
 
           if [ "${COMMAND_TYPE}" = "query" ]; then
-            cat claude_md/ci_query_prompt.md > /tmp/prompt.txt
+            cat "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_query_prompt.md" > /tmp/prompt.txt
             printf '\n---\n\n' >> /tmp/prompt.txt
 
             printf '## Pull Request Context\n' >> /tmp/prompt.txt
@@ -594,7 +625,7 @@ jobs:
             printf '\n---\n## PR Diff (for reference)\n' >> /tmp/prompt.txt
             cat /tmp/pr.diff >> /tmp/prompt.txt
           else
-            cat claude_md/ci_review_prompt.md > /tmp/prompt.txt
+            cat "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_review_prompt.md" > /tmp/prompt.txt
 
             printf '\n## Pull Request Information\n' >> /tmp/prompt.txt
             printf '%s\n' "- **Title:** ${PR_TITLE}" >> /tmp/prompt.txt
@@ -622,8 +653,9 @@ jobs:
         env:
           BASE_SHA: ${{ steps.pr_info.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr_info.outputs.head_sha }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
-          cp claude_md/ci_complexity_eval_prompt.md /tmp/complexity_prompt.txt
+          cp "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_complexity_eval_prompt.md" /tmp/complexity_prompt.txt
           printf '\n---\n\n## Diff Summary\n\n' >> /tmp/complexity_prompt.txt
           git diff --stat "${BASE_SHA}...${HEAD_SHA}" >> /tmp/complexity_prompt.txt
           printf '\n## Changed Files\n\n' >> /tmp/complexity_prompt.txt
@@ -729,6 +761,7 @@ jobs:
           CODEX_HOME: /tmp/codex-home
           CODEX_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model || 'gpt-5.3-codex' }}
           CODEX_REASONING_EFFORT: ${{ steps.budget.outputs.effort }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         run: |
           set +e
           codex exec \
@@ -736,7 +769,7 @@ jobs:
             -c model_reasoning_effort="${CODEX_REASONING_EFFORT}" \
             --dangerously-bypass-approvals-and-sandbox \
             --output-last-message codex-review-recovery.md \
-            - < claude_md/ci_recovery_prompt.md > codex-review-recovery.log 2>&1
+            - < "${WORKFLOW_SUPPORT_DIR}/claude_md/ci_recovery_prompt.md" > codex-review-recovery.log 2>&1
           exit_code=$?
           set -e
           echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
@@ -753,9 +786,10 @@ jobs:
           REVIEWER: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.comment.user.login }}
           COMMAND_TYPE: ${{ steps.command.outputs.type }}
           USED_RECOVERY: ${{ steps.recover.outputs.exit_code == '0' && 'true' || 'false' }}
+          WORKFLOW_SUPPORT_DIR: ${{ github.workspace }}/workflow_support
         with:
           script: |
-            const parse = require('./.github/scripts/parse-codex-review.js');
+            const parse = require(`${process.env.WORKFLOW_SUPPORT_DIR}/.github/scripts/parse-codex-review.js`);
             const fs = require('fs');
             const body = parse({
               responseFile: process.env.RESPONSE_FILE,
