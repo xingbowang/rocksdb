@@ -5,13 +5,40 @@
 
 #include "table/block_based/block_cache.h"
 
+#include "rocksdb/user_defined_block.h"
 #include "table/block_based/block_based_table_reader.h"
+#include "table/block_based/user_defined_block_wrapper.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 void BlockCreateContext::Create(std::unique_ptr<Block_kData>* parsed_out,
-                                BlockContents&& block) {
-  parsed_out->reset(new Block_kData(std::move(block),
+                                BlockContents&& block_content) {
+  // Check if user-defined block factory is present and supports custom format
+  if (use_user_defined_block &&
+      table_options->user_defined_block_factory != nullptr &&
+      table_options->user_defined_block_factory->UsesCustomBlockFormat()) {
+    // Use the user-defined block factory to create a custom block
+    std::unique_ptr<UserDefinedBlock> user_defined_block;
+    UserDefinedBlockOption option;
+    option.comparator = raw_ucmp;
+
+    Status s = table_options->user_defined_block_factory->NewBlock(
+        option, &user_defined_block);
+
+    auto udb_wrapper = std::make_unique<UserDefinedBlockWrapper>(
+        std::move(user_defined_block), std::move(block_content),
+        table_options->read_amp_bytes_per_bit, statistics,
+        data_block_restart_interval, s);
+    if (s.ok()) {
+      s = udb_wrapper->InitBlock();
+    }
+    s.PermitUncheckedError();
+    parsed_out->reset(udb_wrapper.release());
+    return;
+  }
+
+  // Standard RocksDB block format
+  parsed_out->reset(new Block_kData(std::move(block_content),
                                     table_options->read_amp_bytes_per_bit,
                                     statistics, data_block_restart_interval));
   parsed_out->get()->InitializeDataBlockProtectionInfo(protection_bytes_per_key,
@@ -84,6 +111,7 @@ const std::array<const Cache::CacheItemHelper*,
         nullptr,  // kHashIndexMetadata
         nullptr,  // kMetaIndex (not yet stored in block cache)
         BlockCacheInterface<Block_kIndex>::GetFullHelper(),
+        nullptr,  // kUserDefinedIndex
         nullptr,  // kInvalid
     }};
 
@@ -101,6 +129,7 @@ const std::array<const Cache::CacheItemHelper*,
         nullptr,  // kHashIndexMetadata
         nullptr,  // kMetaIndex (not yet stored in block cache)
         BlockCacheInterface<Block_kIndex>::GetBasicHelper(),
+        nullptr,  // kUserDefinedIndex
         nullptr,  // kInvalid
     }};
 }  // namespace

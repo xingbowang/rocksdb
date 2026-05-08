@@ -45,6 +45,7 @@ class WritableFileWriter;
 struct ConfigOptions;
 struct EnvOptions;
 class UserDefinedIndexFactory;
+class UserDefinedBlockFactory;
 
 // Types of checksums to use for checking integrity of logical blocks within
 // files. All checksums currently use 32 bits of checking power (1 in 4B
@@ -589,6 +590,13 @@ struct BlockBasedTableOptions {
 
   // EXPERIMENTAL
   //
+  // If non-nullptr, use the specified factory to build user-defined block.
+  // This allows users to define their own block format. It enables customized
+  // block building, block reading and iterating logic.
+  std::shared_ptr<UserDefinedBlockFactory> user_defined_block_factory = nullptr;
+
+  // EXPERIMENTAL
+  //
   // Return an error Status if a user_defined_index_factory is configured,
   // but there's no corresponding UDI block in the SST file being opened.
   // When use_udi_as_primary_index is true, this check is automatically
@@ -880,6 +888,9 @@ struct BlockBasedTablePropertyNames {
   // filter+index partitioning is ever developed; that optimization/assumption
   // would be disabled when this is set.
   static const std::string kDecoupledPartitionedFilters;
+  // value is UserDefinedBlockFactory::Name() when a UDB factory wrote the
+  // table.
+  static const std::string kUserDefinedBlockFactoryName;
 };
 
 // Create default block based table factory.

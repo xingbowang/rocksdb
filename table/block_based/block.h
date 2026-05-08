@@ -159,12 +159,13 @@ class Block {
   // instead of being calculated later.
   explicit Block(BlockContents&& contents, size_t read_amp_bytes_per_bit = 0,
                  Statistics* statistics = nullptr,
-                 uint32_t restart_interval = 1);
+                 uint32_t restart_interval = 1,
+                 bool skip_initialization = false);
   // No copying allowed
   Block(const Block&) = delete;
   void operator=(const Block&) = delete;
 
-  ~Block();
+  virtual ~Block();
 
   size_t size() const { return contents_.data.size(); }
   const char* data() const { return contents_.data.data(); }
@@ -198,12 +199,12 @@ class Block {
   // NOTE: for the hash based lookup, if a key prefix doesn't match any key,
   // the iterator will simply be set as "invalid", rather than returning
   // the key that is just pass the target key.
-  DataBlockIter* NewDataIterator(const Comparator* raw_ucmp,
-                                 SequenceNumber global_seqno,
-                                 DataBlockIter* iter = nullptr,
-                                 Statistics* stats = nullptr,
-                                 bool block_contents_pinned = false,
-                                 bool user_defined_timestamps_persisted = true);
+  virtual DataBlockIter* NewDataIterator(
+      const Comparator* raw_ucmp, SequenceNumber global_seqno,
+      DataBlockIter* iter = nullptr, Statistics* stats = nullptr,
+      bool block_contents_pinned = false,
+      bool user_defined_timestamps_persisted = true,
+      void* user_defined_block_iterator_arg = nullptr);
 
   // Returns an MetaBlockIter for iterating over blocks containing metadata
   // (like Properties blocks).  Unlike data blocks, the keys for these blocks
@@ -252,10 +253,10 @@ class Block {
           BlockBasedTableOptions::kBinary);
 
   // Report an approximation of how much memory has been used.
-  size_t ApproximateMemoryUsage() const;
+  virtual size_t ApproximateMemoryUsage() const;
 
   // For TypedCacheInterface
-  const Slice& ContentSlice() const { return contents_.data; }
+  virtual const Slice& ContentSlice() const { return contents_.data; }
 
   // Initializes per key-value checksum protection.
   // After this method is called, each DataBlockIterator returned
@@ -287,12 +288,14 @@ class Block {
 
   const char* TEST_GetKVChecksum() const { return kv_checksum_; }
 
+ protected:
+  BlockContents contents_;
+
  private:
   // Returns a detailed error status by re-processing the footer.
   // Should only be called when size() == 0 (error marker).
   Status GetCorruptionStatus() const;
 
-  BlockContents contents_;
   // Normal state: offset in data_ of restart array.
   // Error state (size()==0): original data size if footer decode failed,
   //   otherwise 0. Used by GetCorruptionStatus() to re-decode footer.
@@ -755,19 +758,18 @@ class BlockIter : public InternalIteratorBase<TValue> {
                               bool is_index_key_result);
 };
 
-class DataBlockIter final : public BlockIter<Slice> {
+class DataBlockIter : public BlockIter<Slice> {
  public:
   DataBlockIter()
       : BlockIter(), read_amp_bitmap_(nullptr), last_bitmap_offset_(0) {}
-  void Initialize(const Comparator* raw_ucmp, const char* data,
-                  uint32_t restarts, uint32_t num_restarts,
-                  SequenceNumber global_seqno,
-                  BlockReadAmpBitmap* read_amp_bitmap,
-                  bool block_contents_pinned,
-                  bool user_defined_timestamps_persisted,
-                  DataBlockHashIndex* data_block_hash_index,
-                  uint8_t protection_bytes_per_key, const char* kv_checksum,
-                  uint32_t block_restart_interval, const char* values_section) {
+  virtual void Initialize(
+      const Comparator* raw_ucmp, const char* data, uint32_t restarts,
+      uint32_t num_restarts, SequenceNumber global_seqno,
+      BlockReadAmpBitmap* read_amp_bitmap, bool block_contents_pinned,
+      bool user_defined_timestamps_persisted,
+      DataBlockHashIndex* data_block_hash_index,
+      uint8_t protection_bytes_per_key, const char* kv_checksum,
+      uint32_t block_restart_interval, const char* values_section) {
     InitializeBase(raw_ucmp, data, restarts, num_restarts, global_seqno,
                    block_contents_pinned, user_defined_timestamps_persisted,
                    protection_bytes_per_key, kv_checksum,
@@ -776,6 +778,10 @@ class DataBlockIter final : public BlockIter<Slice> {
     read_amp_bitmap_ = read_amp_bitmap;
     last_bitmap_offset_ = current_ + 1;
     data_block_hash_index_ = data_block_hash_index;
+  }
+
+  virtual DataBlockIteratorType Type() const {
+    return DataBlockIteratorType::kDefaultDataBlockIter;
   }
 
   Slice value() const override {

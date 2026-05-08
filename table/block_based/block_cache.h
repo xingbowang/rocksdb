@@ -19,10 +19,13 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-// Metaprogramming wrappers for Block, to give each type a single role when
-// used with FullTypedCacheInterface.
-// (NOTE: previous attempts to create actual derived classes of Block with
-// virtual calls resulted in performance regression)
+// Forward declaration
+class UserDefinedBlock;
+
+// Metaprogramming wrappers for built-in Block roles, to give each type a
+// single role when used with FullTypedCacheInterface. User-defined blocks can
+// still use a real derived Block wrapper when custom virtual dispatch is
+// explicitly requested through UserDefinedBlockFactory.
 
 class Block_kData : public Block {
  public:
@@ -87,7 +90,8 @@ struct BlockCreateContext : public Cache::CreateContext {
                      bool _index_value_is_full = false,
                      bool _index_has_first_key = false,
                      uint32_t _data_block_restart_interval = 0,
-                     uint32_t _index_block_restart_interval = 0)
+                     uint32_t _index_block_restart_interval = 0,
+                     bool _use_user_defined_block = false)
       : table_options(_table_options),
         ioptions(_ioptions),
         statistics(_statistics),
@@ -97,7 +101,8 @@ struct BlockCreateContext : public Cache::CreateContext {
         index_value_is_full(_index_value_is_full),
         index_has_first_key(_index_has_first_key),
         data_block_restart_interval(_data_block_restart_interval),
-        index_block_restart_interval(_index_block_restart_interval) {}
+        index_block_restart_interval(_index_block_restart_interval),
+        use_user_defined_block(_use_user_defined_block) {}
 
   const BlockBasedTableOptions* table_options = nullptr;
   const ImmutableOptions* ioptions = nullptr;
@@ -106,11 +111,12 @@ struct BlockCreateContext : public Cache::CreateContext {
   Decompressor* decompressor = nullptr;
   const Comparator* raw_ucmp = nullptr;
   uint8_t protection_bytes_per_key = 0;
-  bool index_value_is_full;
-  bool index_has_first_key;
+  bool index_value_is_full = false;
+  bool index_has_first_key = false;
   // Restart intervals from table properties (0 if not available)
   uint32_t data_block_restart_interval = 0;
   uint32_t index_block_restart_interval = 0;
+  bool use_user_defined_block = false;
 
   // For TypedCacheInterface
   template <typename TBlocklike>

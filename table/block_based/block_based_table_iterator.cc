@@ -20,9 +20,9 @@ void BlockBasedTableIterator::SeekSecondPass(const Slice* target) {
   AsyncInitDataBlock(/*is_first_pass=*/false);
 
   if (target) {
-    block_iter_.Seek(*target);
+    block_iter_->Seek(*target);
   } else {
-    block_iter_.SeekToFirst();
+    block_iter_->SeekToFirst();
   }
   FindKeyForward();
 
@@ -103,7 +103,7 @@ void BlockBasedTableIterator::SeekImpl(const Slice* target,
   // MultiScan must always go through index_iter_->Seek() so that
   // MultiScanIndexIterator can update its scan range tracking state.
   if (!multi_scan_read_set_ && IsIndexAtCurr() &&
-      block_iter_points_to_real_block_ && block_iter_.Valid()) {
+      block_iter_points_to_real_block_ && block_iter_->Valid()) {
     // Reseek.
     prev_block_offset_ = index_iter_->value().handle.offset();
 
@@ -117,7 +117,7 @@ void BlockBasedTableIterator::SeekImpl(const Slice* target,
       // improve for the boundary cases, but it would complicate the
       // code.
       if (user_comparator_.Compare(ExtractUserKey(*target),
-                                   block_iter_.user_key()) > 0 &&
+                                   block_iter_->user_key()) > 0 &&
           user_comparator_.Compare(ExtractUserKey(*target),
                                    index_iter_->user_key()) < 0) {
         need_seek_index = false;
@@ -183,9 +183,9 @@ void BlockBasedTableIterator::SeekImpl(const Slice* target,
     }
 
     if (target) {
-      block_iter_.Seek(*target);
+      block_iter_->Seek(*target);
     } else {
-      block_iter_.SeekToFirst();
+      block_iter_->SeekToFirst();
     }
     FindKeyForward();
   }
@@ -271,12 +271,12 @@ void BlockBasedTableIterator::SeekForPrev(const Slice& target) {
 
   InitDataBlock();
 
-  block_iter_.SeekForPrev(target);
+  block_iter_->SeekForPrev(target);
 
   FindKeyBackward();
   CheckDataBlockWithinUpperBound();
-  assert(!block_iter_.Valid() ||
-         icomp_.Compare(target, block_iter_.key()) >= 0);
+  assert(!block_iter_->Valid() ||
+         icomp_.Compare(target, block_iter_->key()) >= 0);
 }
 
 void BlockBasedTableIterator::SeekToLast() {
@@ -298,7 +298,7 @@ void BlockBasedTableIterator::SeekToLast() {
   }
 
   InitDataBlock();
-  block_iter_.SeekToLast();
+  block_iter_->SeekToLast();
   FindKeyBackward();
   CheckDataBlockWithinUpperBound();
 }
@@ -310,7 +310,7 @@ void BlockBasedTableIterator::Next() {
     return;
   }
   assert(block_iter_points_to_real_block_);
-  block_iter_.Next();
+  block_iter_->Next();
   FindKeyForward();
   CheckOutOfBound();
 }
@@ -363,10 +363,10 @@ void BlockBasedTableIterator::Prev() {
     }
 
     InitDataBlock();
-    block_iter_.SeekToLast();
+    block_iter_->SeekToLast();
   } else {
     assert(block_iter_points_to_real_block_);
-    block_iter_.Prev();
+    block_iter_->Prev();
   }
 
   FindKeyBackward();
@@ -398,8 +398,10 @@ void BlockBasedTableIterator::InitDataBlock() {
       if (!multi_scan_status_.ok()) {
         return;
       }
-      table_->NewDataBlockIterator<DataBlockIter>(read_options_, block_entry,
-                                                  &block_iter_, Status::OK());
+      Status create_iter_status = table_->CreateDataBlockIterator(
+          read_options_, block_entry, &block_iter_, Status::OK(),
+          /*input_iter_owned=*/OwnsBlockIter());
+      create_iter_status.PermitUncheckedError();
       block_iter_points_to_real_block_ = true;
       prev_block_offset_ = data_block_handle.offset();
       CheckDataBlockWithinUpperBound();
@@ -423,7 +425,7 @@ void BlockBasedTableIterator::InitDataBlock() {
   if (!block_iter_points_to_real_block_ ||
       data_block_handle.offset() != prev_block_offset_ ||
       // if previous attempt of reading the block missed cache, try again
-      block_iter_.status().IsIncomplete()) {
+      block_iter_->status().IsIncomplete()) {
     if (block_iter_points_to_real_block_) {
       ResetDataIter();
     }
@@ -433,11 +435,13 @@ void BlockBasedTableIterator::InitDataBlock() {
 
     // Initialize Data Block From CacheableEntry.
     if (is_in_cache) {
-      Status s;
-      block_iter_.Invalidate(Status::OK());
-      table_->NewDataBlockIterator<DataBlockIter>(
+      if (block_iter_ != nullptr) {
+        block_iter_->Invalidate(Status::OK());
+      }
+      Status create_iter_status = table_->CreateDataBlockIterator(
           read_options_, (block_handles_->front().cachable_entry_).As<Block>(),
-          &block_iter_, s);
+          &block_iter_, Status::OK(), /*input_iter_owned=*/OwnsBlockIter());
+      create_iter_status.PermitUncheckedError();
     } else {
       auto* rep = table_->get_rep();
 
@@ -462,13 +466,13 @@ void BlockBasedTableIterator::InitDataBlock() {
           /*no_sequential_checking=*/false, read_options_, readaheadsize_cb,
           read_options_.async_io);
 
-      Status s;
-      table_->NewDataBlockIterator<DataBlockIter>(
-          read_options_, data_block_handle, &block_iter_, BlockType::kData,
+      Status create_iter_status = table_->CreateDataBlockIterator(
+          &block_iter_, read_options_, data_block_handle,
           /*get_context=*/nullptr, &lookup_context_,
-          block_prefetcher_.prefetch_buffer(),
-          /*for_compaction=*/is_for_compaction, /*async_read=*/false, s,
-          use_block_cache_for_lookup);
+          block_prefetcher_.prefetch_buffer(), is_for_compaction,
+          /*async_read=*/false, use_block_cache_for_lookup,
+          /*input_iter_owned=*/OwnsBlockIter());
+      create_iter_status.PermitUncheckedError();
     }
     block_iter_points_to_real_block_ = true;
 
@@ -493,7 +497,7 @@ void BlockBasedTableIterator::AsyncInitDataBlock(bool is_first_pass) {
     if (!block_iter_points_to_real_block_ ||
         data_block_handle.offset() != prev_block_offset_ ||
         // if previous attempt of reading the block missed cache, try again
-        block_iter_.status().IsIncomplete()) {
+        block_iter_->status().IsIncomplete()) {
       if (block_iter_points_to_real_block_) {
         ResetDataIter();
       }
@@ -522,13 +526,13 @@ void BlockBasedTableIterator::AsyncInitDataBlock(bool is_first_pass) {
           is_for_compaction, /*no_sequential_checking=*/read_options_.async_io,
           read_options_, readaheadsize_cb, read_options_.async_io);
 
-      Status s;
-      table_->NewDataBlockIterator<DataBlockIter>(
-          read_options_, data_block_handle, &block_iter_, BlockType::kData,
+      Status s = table_->CreateDataBlockIterator(
+          &block_iter_, read_options_, data_block_handle,
           /*get_context=*/nullptr, &lookup_context_,
           block_prefetcher_.prefetch_buffer(),
-          /*for_compaction=*/is_for_compaction, /*async_read=*/true, s,
-          /*use_block_cache_for_lookup=*/true);
+          /*for_compaction=*/is_for_compaction, /*async_read=*/true,
+          /*use_block_cache_for_lookup=*/true,
+          /*input_iter_owned=*/OwnsBlockIter());
 
       if (s.IsTryAgain()) {
         async_read_in_progress_ = true;
@@ -547,20 +551,24 @@ void BlockBasedTableIterator::AsyncInitDataBlock(bool is_first_pass) {
       data_block_handle = index_iter_->value().handle;
     }
 
-    Status s;
     // Initialize Data Block From CacheableEntry.
     if (is_in_cache) {
-      block_iter_.Invalidate(Status::OK());
-      table_->NewDataBlockIterator<DataBlockIter>(
+      if (block_iter_ != nullptr) {
+        block_iter_->Invalidate(Status::OK());
+      }
+      Status create_iter_status = table_->CreateDataBlockIterator(
           read_options_, (block_handles_->front().cachable_entry_).As<Block>(),
-          &block_iter_, s);
+          &block_iter_, Status::OK(), /*input_iter_owned=*/OwnsBlockIter());
+      create_iter_status.PermitUncheckedError();
     } else {
-      table_->NewDataBlockIterator<DataBlockIter>(
-          read_options_, data_block_handle, &block_iter_, BlockType::kData,
+      Status create_iter_status = table_->CreateDataBlockIterator(
+          &block_iter_, read_options_, data_block_handle,
           /*get_context=*/nullptr, &lookup_context_,
-          block_prefetcher_.prefetch_buffer(),
-          /*for_compaction=*/is_for_compaction, /*async_read=*/false, s,
-          /*use_block_cache_for_lookup=*/false);
+          block_prefetcher_.prefetch_buffer(), is_for_compaction,
+          /*async_read=*/false,
+          /*use_block_cache_for_lookup=*/false,
+          /*input_iter_owned=*/OwnsBlockIter());
+      create_iter_status.PermitUncheckedError();
     }
   }
   block_iter_points_to_real_block_ = true;
@@ -586,11 +594,11 @@ bool BlockBasedTableIterator::MaterializeCurrentBlock() {
   InitDataBlock();
   assert(block_iter_points_to_real_block_);
 
-  if (!block_iter_.status().ok()) {
+  if (!block_iter_->status().ok()) {
     return false;
   }
 
-  block_iter_.SeekToFirst();
+  block_iter_->SeekToFirst();
 
   // MaterializeCurrentBlock is called when block is actually read by
   // calling InitDataBlock. is_at_first_key_from_index_ will be false for block
@@ -604,9 +612,9 @@ bool BlockBasedTableIterator::MaterializeCurrentBlock() {
     first_internal_key = index_iter_->value().first_internal_key;
   }
 
-  if (!block_iter_.Valid() ||
-      icomp_.Compare(block_iter_.key(), first_internal_key) != 0) {
-    block_iter_.Invalidate(Status::Corruption(
+  if (!block_iter_->Valid() ||
+      icomp_.Compare(block_iter_->key(), first_internal_key) != 0) {
+    block_iter_->Invalidate(Status::Corruption(
         "first key in index doesn't match first key in block"));
     return false;
   }
@@ -618,7 +626,7 @@ void BlockBasedTableIterator::FindKeyForward() {
   assert(!is_out_of_bound_);
   assert(block_iter_points_to_real_block_);
 
-  if (!block_iter_.Valid()) {
+  if (!block_iter_->Valid()) {
     // This is the only call site of FindBlockForward(), but it's extracted into
     // a separate method to keep FindKeyForward() short and likely to be
     // inlined. When transitioning to a different block, we call
@@ -633,7 +641,7 @@ void BlockBasedTableIterator::FindBlockForward() {
   // TODO the while loop inherits from two-level-iterator. We don't know
   // whether a block can be empty so it can be replaced by an "if".
   do {
-    if (!block_iter_.status().ok()) {
+    if (!block_iter_->status().ok()) {
       return;
     }
     // Whether next data block is out of upper bound, if there is one.
@@ -726,13 +734,13 @@ void BlockBasedTableIterator::FindBlockForward() {
       // MultiScan InitDataBlock failed (prefetch limit or IO error)
       return;
     }
-    block_iter_.SeekToFirst();
-  } while (!block_iter_.Valid());
+    block_iter_->SeekToFirst();
+  } while (!block_iter_->Valid());
 }
 
 void BlockBasedTableIterator::FindKeyBackward() {
-  while (!block_iter_.Valid()) {
-    if (!block_iter_.status().ok()) {
+  while (!block_iter_->Valid()) {
+    if (!block_iter_->status().ok()) {
       return;
     }
 
@@ -741,7 +749,7 @@ void BlockBasedTableIterator::FindKeyBackward() {
 
     if (index_iter_->Valid()) {
       InitDataBlock();
-      block_iter_.SeekToLast();
+      block_iter_->SeekToLast();
     } else {
       return;
     }

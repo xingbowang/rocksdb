@@ -537,7 +537,11 @@ DEFINE_SYNC_AND_ASYNC(void, BlockBasedTable::MultiGet)
     }
 
     DataBlockIter first_biter;
+    DataBlockIter* first_biter_ptr = &first_biter;
+    std::unique_ptr<InternalIterator> first_biter_holder;
     DataBlockIter next_biter;
+    DataBlockIter* next_biter_ptr = &next_biter;
+    std::unique_ptr<InternalIterator> next_biter_holder;
     size_t idx_in_batch = 0;
     SharedCleanablePtr shared_cleanable;
     for (auto miter = sst_file_range.begin(); miter != sst_file_range.end();
@@ -563,10 +567,18 @@ DEFINE_SYNC_AND_ASYNC(void, BlockBasedTable::MultiGet)
           handle_present = !block_handles[idx_in_batch].IsNull();
           parsed_block_value = results[idx_in_batch].GetValue();
           if (handle_present || parsed_block_value) {
+            if (first_biter_ptr != &first_biter) {
+              first_biter_holder.reset();
+              first_biter_ptr = &first_biter;
+            }
             first_biter.Invalidate(Status::OK());
-            NewDataBlockIterator<DataBlockIter>(
-                read_options, results[idx_in_batch].As<Block>(), &first_biter,
-                statuses[idx_in_batch]);
+            Status create_iter_status = CreateDataBlockIterator(
+                read_options, results[idx_in_batch].As<Block>(),
+                &first_biter_ptr, statuses[idx_in_batch]);
+            create_iter_status.PermitUncheckedError();
+            if (first_biter_ptr != &first_biter) {
+              first_biter_holder.reset(first_biter_ptr);
+            }
             reusing_prev_block = false;
           } else {
             // If handle is null and result is empty, then the status is never
@@ -574,7 +586,7 @@ DEFINE_SYNC_AND_ASYNC(void, BlockBasedTable::MultiGet)
             assert(statuses[idx_in_batch].ok());
             reusing_prev_block = true;
           }
-          biter = &first_biter;
+          biter = first_biter_ptr;
           later_reused =
               (reused_mask & (MultiGetContext::Mask{1} << idx_in_batch)) != 0;
           idx_in_batch++;
@@ -590,15 +602,22 @@ DEFINE_SYNC_AND_ASYNC(void, BlockBasedTable::MultiGet)
             break;
           }
 
+          if (next_biter_ptr != &next_biter) {
+            next_biter_holder.reset();
+            next_biter_ptr = &next_biter;
+          }
           next_biter.Invalidate(Status::OK());
-          Status tmp_s;
-          NewDataBlockIterator<DataBlockIter>(
-              read_options, iiter->value().handle, &next_biter,
-              BlockType::kData, get_context, lookup_data_block_context,
+          Status create_iter_status = CreateDataBlockIterator(
+              &next_biter_ptr, read_options, iiter->value().handle, get_context,
+              lookup_data_block_context,
               /* prefetch_buffer= */ nullptr, /* for_compaction = */ false,
-              /*async_read = */ false, tmp_s,
+              /*async_read = */ false,
               /* use_block_cache_for_lookup = */ true);
-          biter = &next_biter;
+          create_iter_status.PermitUncheckedError();
+          if (next_biter_ptr != &next_biter) {
+            next_biter_holder.reset(next_biter_ptr);
+          }
+          biter = next_biter_ptr;
           reusing_prev_block = false;
           later_reused = false;
         }

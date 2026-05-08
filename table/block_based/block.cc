@@ -1304,11 +1304,15 @@ Status Block::GetCorruptionStatus() const {
 }
 
 Block::Block(BlockContents&& contents, size_t read_amp_bytes_per_bit,
-             Statistics* statistics, uint32_t restart_interval)
+             Statistics* statistics, uint32_t restart_interval,
+             bool skip_initialization)
     : contents_(std::move(contents)),
       restart_offset_(0),
       num_restarts_(0),
       block_restart_interval_(restart_interval) {
+  if (skip_initialization) {
+    return;
+  }
   TEST_SYNC_POINT("Block::Block:0");
   auto& size = contents_.data.size_;
   // `contents` is assumed to be uncompressed in the proper format
@@ -1515,11 +1519,11 @@ MetaBlockIter* Block::NewMetaIterator(bool block_contents_pinned) {
   return iter;
 }
 
-DataBlockIter* Block::NewDataIterator(const Comparator* raw_ucmp,
-                                      SequenceNumber global_seqno,
-                                      DataBlockIter* iter, Statistics* stats,
-                                      bool block_contents_pinned,
-                                      bool user_defined_timestamps_persisted) {
+DataBlockIter* Block::NewDataIterator(
+    const Comparator* raw_ucmp, SequenceNumber global_seqno,
+    DataBlockIter* iter, Statistics* stats, bool block_contents_pinned,
+    bool user_defined_timestamps_persisted,
+    void* /*user_defined_block_iterator_arg*/) {
   DataBlockIter* ret_iter;
   if (iter != nullptr) {
     ret_iter = iter;

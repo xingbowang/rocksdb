@@ -38,6 +38,7 @@
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/table.h"
 #include "rocksdb/types.h"
+#include "rocksdb/user_defined_block.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "table/block_based/block_based_table_reader.h"
@@ -145,11 +146,14 @@ class BlockBasedTableBuilder::BlockBasedTablePropertiesCollector
  public:
   explicit BlockBasedTablePropertiesCollector(
       BlockBasedTableOptions::IndexType index_type, bool whole_key_filtering,
-      bool prefix_filtering, bool decoupled_partitioned_filters)
+      bool prefix_filtering, bool decoupled_partitioned_filters,
+      std::string user_defined_block_factory_name)
       : index_type_(index_type),
         whole_key_filtering_(whole_key_filtering),
         prefix_filtering_(prefix_filtering),
-        decoupled_partitioned_filters_(decoupled_partitioned_filters) {}
+        decoupled_partitioned_filters_(decoupled_partitioned_filters),
+        user_defined_block_factory_name_(
+            std::move(user_defined_block_factory_name)) {}
 
   Status InternalAdd(const Slice& /*key*/, const Slice& /*value*/,
                      uint64_t /*file_size*/) override {
@@ -178,6 +182,11 @@ class BlockBasedTableBuilder::BlockBasedTablePropertiesCollector
           {BlockBasedTablePropertyNames::kDecoupledPartitionedFilters,
            kPropTrue});
     }
+    if (!user_defined_block_factory_name_.empty()) {
+      properties->insert(
+          {BlockBasedTablePropertyNames::kUserDefinedBlockFactoryName,
+           user_defined_block_factory_name_});
+    }
     return Status::OK();
   }
 
@@ -196,6 +205,7 @@ class BlockBasedTableBuilder::BlockBasedTablePropertiesCollector
   bool whole_key_filtering_;
   bool prefix_filtering_;
   bool decoupled_partitioned_filters_;
+  std::string user_defined_block_factory_name_;
 };
 
 struct BlockBasedTableBuilder::WorkingAreaPair {
@@ -835,7 +845,7 @@ struct BlockBasedTableBuilder::Rep {
   // but can be read by other threads to estimate current file size
   RelaxedAtomic<uint64_t> offset{0};
   size_t alignment;
-  BlockBuilder data_block;
+  std::unique_ptr<BlockBuilder> data_block;
   // Buffers uncompressed data blocks to replay later. Needed when
   // compression dictionary is enabled so we can finalize the dictionary before
   // compressing any data blocks.
@@ -1061,17 +1071,7 @@ struct BlockBasedTableBuilder::Rep {
                       ? std::min(static_cast<size_t>(table_options.block_size),
                                  kDefaultPageSize)
                       : 0),
-        data_block(table_options.block_restart_interval,
-                   table_options.use_delta_encoding,
-                   false /* use_value_delta_encoding */,
-                   tbo.internal_comparator.user_comparator()
-                           ->CanKeysWithDifferentByteContentsBeEqual()
-                       ? BlockBasedTableOptions::kDataBlockBinarySearch
-                       : table_options.data_block_index_type,
-                   table_options.data_block_hash_table_util_ratio, ts_sz,
-                   persist_user_defined_timestamps, false /* is_user_key */,
-                   table_options.separate_key_value_in_data_block,
-                   tbo.ioptions.stats),
+        data_block(nullptr),
         range_del_block(
             1 /* block_restart_interval */, true /* use_delta_encoding */,
             false /* use_value_delta_encoding */,
@@ -1089,9 +1089,7 @@ struct BlockBasedTableBuilder::Rep {
         reason(tbo.reason),
         target_file_size_is_upper_bound(
             tbo.moptions.target_file_size_is_upper_bound),
-        flush_block_policy(
-            table_options.flush_block_policy_factory->NewFlushBlockPolicy(
-                table_options, data_block)),
+        flush_block_policy(nullptr),
         warm_cache_config(WarmCacheConfig::Compute(
             table_options.prepopulate_block_cache, reason)),
         create_context(&table_options, &ioptions, ioptions.stats,
@@ -1102,8 +1100,75 @@ struct BlockBasedTableBuilder::Rep {
                        table_opt.index_type ==
                            BlockBasedTableOptions::kBinarySearchWithFirstKey,
                        table_options.block_restart_interval,
-                       table_options.index_block_restart_interval),
+                       table_options.index_block_restart_interval,
+                       table_options.user_defined_block_factory != nullptr),
         tail_size(0) {
+    const bool unsupported_udb_block_protection =
+        table_options.user_defined_block_factory != nullptr &&
+        tbo.moptions.block_protection_bytes_per_key != 0;
+    const bool unsupported_udb_separate_kv =
+        table_options.user_defined_block_factory != nullptr &&
+        table_options.separate_key_value_in_data_block;
+    const char* udb_factory_name =
+        table_options.user_defined_block_factory == nullptr
+            ? nullptr
+            : table_options.user_defined_block_factory->Name();
+    const bool invalid_udb_factory_name =
+        table_options.user_defined_block_factory != nullptr &&
+        (udb_factory_name == nullptr || udb_factory_name[0] == '\0');
+    if (unsupported_udb_block_protection) {
+      SetStatus(Status::NotSupported(
+          "user_defined_block_factory is not supported with "
+          "block_protection_bytes_per_key"));
+    }
+    if (unsupported_udb_separate_kv) {
+      SetStatus(Status::NotSupported(
+          "user_defined_block_factory is not supported with "
+          "separate_key_value_in_data_block"));
+    }
+    if (invalid_udb_factory_name) {
+      SetStatus(Status::InvalidArgument(
+          "user_defined_block_factory must have a non-empty Name"));
+    }
+
+    auto new_default_data_block = [&] {
+      return std::make_unique<BlockBuilder>(
+          table_options.block_restart_interval,
+          table_options.use_delta_encoding,
+          false /* use_value_delta_encoding */,
+          tbo.internal_comparator.user_comparator()
+                  ->CanKeysWithDifferentByteContentsBeEqual()
+              ? BlockBasedTableOptions::kDataBlockBinarySearch
+              : table_options.data_block_index_type,
+          table_options.data_block_hash_table_util_ratio, ts_sz,
+          persist_user_defined_timestamps, false /* is_user_key */,
+          table_options.separate_key_value_in_data_block, tbo.ioptions.stats);
+    };
+
+    if (table_options.user_defined_block_factory != nullptr &&
+        !unsupported_udb_block_protection && !unsupported_udb_separate_kv &&
+        !invalid_udb_factory_name) {
+      UserDefinedBlockOption udb_option;
+      udb_option.comparator = tbo.internal_comparator.user_comparator();
+      Status s = table_options.user_defined_block_factory->NewBuilder(
+          udb_option, data_block);
+      if (!s.ok()) {
+        SetStatus(std::move(s));
+      } else if (data_block == nullptr) {
+        SetStatus(Status::InvalidArgument(
+            "user_defined_block_factory returned a null block builder"));
+      }
+    } else {
+      data_block = new_default_data_block();
+    }
+    if (data_block == nullptr) {
+      data_block = new_default_data_block();
+    }
+
+    flush_block_policy = std::unique_ptr<FlushBlockPolicy>(
+        table_options.flush_block_policy_factory->NewFlushBlockPolicy(
+            table_options, *data_block));
+
     FilterBuildingContext filter_context(table_options);
 
     filter_context.info_log = ioptions.logger;
@@ -1154,7 +1219,8 @@ struct BlockBasedTableBuilder::Rep {
           basic_compressor->GetDictGuidance(CacheEntryRole::kDataBlock);
       if (auto* sampling =
               std::get_if<Compressor::DictSampling>(&data_block_dict_guidance);
-          sampling != nullptr && sampling->max_sample_bytes > 0) {
+          sampling != nullptr && sampling->max_sample_bytes > 0 &&
+          table_options.user_defined_block_factory == nullptr) {
         // Sampling mode: collect samples up to max_sample_bytes
         state = State::kBuffered;
         if (tbo.target_file_size == 0) {
@@ -1181,6 +1247,10 @@ struct BlockBasedTableBuilder::Rep {
                    data_block_dict_guidance) ||
                std::holds_alternative<Compressor::DictDisabled>(
                    data_block_dict_guidance));
+        // This branch also handles DictSampling when user-defined data blocks
+        // are enabled. They cannot use dictionary-training buffering because
+        // the replay path parses buffered blocks with the built-in block
+        // format to rebuild filter and index state.
         // No distinct data block compressor using dictionary, but
         // implementation might still want to specialize for data blocks
         data_block_compressor = MaybeCloneSpecialized(
@@ -1349,7 +1419,8 @@ struct BlockBasedTableBuilder::Rep {
         std::make_unique<BlockBasedTablePropertiesCollector>(
             table_options.index_type, table_options.whole_key_filtering,
             prefix_extractor != nullptr,
-            table_options.decouple_partitioned_filters));
+            table_options.decouple_partitioned_filters,
+            udb_factory_name == nullptr ? "" : udb_factory_name));
     if (ts_sz > 0 && persist_user_defined_timestamps) {
       table_properties_collectors.emplace_back(
           std::make_unique<TimestampTablePropertiesCollector>(
@@ -1582,7 +1653,7 @@ void BlockBasedTableBuilder::Add(const Slice& ikey, const Slice& value) {
 
     auto should_flush = r->flush_block_policy->Update(ikey, value);
     if (should_flush) {
-      assert(!r->data_block.empty());
+      assert(!r->data_block->empty());
       Flush(/*first_key_in_next_block=*/&ikey);
     }
 
@@ -1601,7 +1672,7 @@ void BlockBasedTableBuilder::Add(const Slice& ikey, const Slice& value) {
     }
 
     // NOTE: WriteBatch guarantees keys < 4GB; value size checked above
-    r->data_block.AddWithLastKey(ikey, value, r->last_ikey);
+    r->data_block->AddWithLastKey(ikey, value, r->last_ikey);
     r->last_ikey.assign(ikey.data(), ikey.size());
     assert(!r->last_ikey.empty());
     if (r->state == Rep::State::kBuffered) {
@@ -1662,10 +1733,10 @@ void BlockBasedTableBuilder::Flush(const Slice* first_key_in_next_block) {
   if (UNLIKELY(!ok())) {
     return;
   }
-  if (r->data_block.empty()) {
+  if (r->data_block->empty()) {
     return;
   }
-  Slice uncompressed_block_data = r->data_block.Finish();
+  Slice uncompressed_block_data = r->data_block->Finish();
 
   // NOTE: compression sampling is done here in the same thread as building
   // the uncompressed block because of the requirements to call table
@@ -1732,7 +1803,7 @@ void BlockBasedTableBuilder::Flush(const Slice* first_key_in_next_block) {
   if (rep_->state == Rep::State::kBuffered) {
     std::string uncompressed_block_holder;
     uncompressed_block_holder.reserve(rep_->table_options.block_size);
-    r->data_block.SwapAndReset(uncompressed_block_holder);
+    r->data_block->SwapAndReset(uncompressed_block_holder);
     assert(uncompressed_block_data.size() == uncompressed_block_holder.size());
     rep_->data_block_buffers.emplace_back(std::move(uncompressed_block_holder));
     rep_->data_begin_offset += uncompressed_block_data.size();
@@ -1750,13 +1821,13 @@ void BlockBasedTableBuilder::Flush(const Slice* first_key_in_next_block) {
     }
 
     if (r->IsParallelCompressionActive()) {
-      EmitBlockForParallel(r->data_block.MutableBuffer(), r->last_ikey,
+      EmitBlockForParallel(r->data_block->MutableBuffer(), r->last_ikey,
                            first_key_in_next_block);
     } else {
-      EmitBlock(r->data_block.MutableBuffer(), r->last_ikey,
+      EmitBlock(r->data_block->MutableBuffer(), r->last_ikey,
                 first_key_in_next_block);
     }
-    r->data_block.Reset();
+    r->data_block->Reset();
   }
 }
 

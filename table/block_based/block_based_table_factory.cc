@@ -26,6 +26,7 @@
 #include "rocksdb/flush_block_policy.h"
 #include "rocksdb/rocksdb_namespace.h"
 #include "rocksdb/table.h"
+#include "rocksdb/user_defined_block.h"
 #include "rocksdb/user_defined_index.h"
 #include "rocksdb/utilities/customizable_util.h"
 #include "rocksdb/utilities/options_type.h"
@@ -332,6 +333,11 @@ static struct BlockBasedTableTypeInfo {
          OptionTypeInfo::AsCustomSharedPtr<UserDefinedIndexFactory>(
              offsetof(struct BlockBasedTableOptions,
                       user_defined_index_factory),
+             OptionVerificationType::kByNameAllowFromNull)},
+        {"user_defined_block_factory",
+         OptionTypeInfo::AsCustomSharedPtr<UserDefinedBlockFactory>(
+             offsetof(struct BlockBasedTableOptions,
+                      user_defined_block_factory),
              OptionVerificationType::kByNameAllowFromNull)},
         {"whole_key_filtering",
          {offsetof(struct BlockBasedTableOptions, whole_key_filtering),
@@ -760,6 +766,26 @@ Status BlockBasedTableFactory::ValidateOptions(
         "data_block_hash_table_util_ratio should be greater than 0 when "
         "data_block_index_type is set to kDataBlockBinaryAndHash");
   }
+  if (table_options_.user_defined_block_factory != nullptr &&
+      cf_opts.block_protection_bytes_per_key != 0) {
+    return Status::NotSupported(
+        "user_defined_block_factory is not supported with "
+        "block_protection_bytes_per_key");
+  }
+  if (table_options_.user_defined_block_factory != nullptr &&
+      table_options_.separate_key_value_in_data_block) {
+    return Status::NotSupported(
+        "user_defined_block_factory is not supported with "
+        "separate_key_value_in_data_block");
+  }
+  if (table_options_.user_defined_block_factory != nullptr) {
+    const char* factory_name =
+        table_options_.user_defined_block_factory->Name();
+    if (factory_name == nullptr || factory_name[0] == '\0') {
+      return Status::InvalidArgument(
+          "user_defined_block_factory must have a non-empty Name");
+    }
+  }
   if (table_options_.user_defined_index_factory) {
     if (cf_opts.compression_opts.parallel_threads > 1 ||
         cf_opts.bottommost_compression_opts.parallel_threads > 1) {
@@ -964,6 +990,11 @@ std::string BlockBasedTableFactory::GetPrintableOptions() const {
   snprintf(buffer, kBufferSize, "  use_udi_as_primary_index: %d\n",
            table_options_.use_udi_as_primary_index);
   ret.append(buffer);
+  snprintf(buffer, kBufferSize, "  user_defined_block_factory: %s\n",
+           table_options_.user_defined_block_factory == nullptr
+               ? "nullptr"
+               : table_options_.user_defined_block_factory->Name());
+  ret.append(buffer);
   snprintf(buffer, kBufferSize, "  fail_if_no_udi_on_open: %d\n",
            table_options_.fail_if_no_udi_on_open);
   ret.append(buffer);
@@ -1138,6 +1169,8 @@ const std::string BlockBasedTablePropertyNames::kPrefixFiltering =
     "rocksdb.block.based.table.prefix.filtering";
 const std::string BlockBasedTablePropertyNames::kDecoupledPartitionedFilters =
     "rocksdb.block.based.table.decoupled.partitioned.filters";
+const std::string BlockBasedTablePropertyNames::kUserDefinedBlockFactoryName =
+    "rocksdb.block.based.table.user.defined.block.factory.name";
 const std::string kHashIndexPrefixesBlock = "rocksdb.hashindex.prefixes";
 const std::string kHashIndexPrefixesMetadataBlock =
     "rocksdb.hashindex.metadata";

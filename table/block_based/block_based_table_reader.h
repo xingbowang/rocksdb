@@ -345,6 +345,18 @@ class BlockBasedTable : public TableReader {
 
   friend class UncompressionDictReader;
 
+  Status CreateDataBlockIterator(
+      DataBlockIter** biter, const ReadOptions& read_options,
+      const BlockHandle& block_handle, GetContext* get_context,
+      BlockCacheLookupContext* lookup_data_block_context,
+      FilePrefetchBuffer* prefetch_buffer, bool for_compaction, bool async_read,
+      bool use_block_cache_for_lookup, bool input_iter_owned = false) const;
+
+  Status CreateDataBlockIterator(const ReadOptions& read_options,
+                                 CachableEntry<Block>& block,
+                                 DataBlockIter** biter, Status s = Status::OK(),
+                                 bool input_iter_owned = false) const;
+
  protected:
   Rep* rep_;
   explicit BlockBasedTable(Rep* rep, BlockCacheTracer* const block_cache_tracer)
@@ -358,6 +370,9 @@ class BlockBasedTable : public TableReader {
   friend class BlockBasedTableReaderTestVerifyChecksum_ChecksumMismatch_Test;
   BlockCacheTracer* const block_cache_tracer_;
 
+  void CreateUserDefinedBlockIteratorIfEnabled(DataBlockIter** biter, Status& s,
+                                               bool input_iter_owned) const;
+
   void UpdateCacheHitMetrics(BlockType block_type, GetContext* get_context,
                              size_t usage) const;
   void UpdateCacheMissMetrics(BlockType block_type,
@@ -365,8 +380,8 @@ class BlockBasedTable : public TableReader {
 
   // Either Block::NewDataIterator() or Block::NewIndexIterator().
   template <typename TBlockIter>
-  static TBlockIter* InitBlockIterator(const Rep* rep, Block* block,
-                                       BlockType block_type,
+  static TBlockIter* InitBlockIterator(ReadOptions read_options, const Rep* rep,
+                                       Block* block, BlockType block_type,
                                        TBlockIter* input_iter,
                                        bool block_contents_pinned);
 
@@ -662,6 +677,10 @@ struct BlockBasedTable::Rep {
 
   // Context for block cache CreateCallback
   BlockCreateContext create_context;
+
+  // True when this table's data blocks were written by the configured
+  // user_defined_block_factory.
+  bool use_user_defined_block = false;
 
   // If global_seqno is used, all Keys in this file will have the same
   // seqno with value `global_seqno`.

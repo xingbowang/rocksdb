@@ -37,6 +37,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
         icomp_(icomp),
         user_comparator_(icomp.user_comparator()),
         pinned_iters_mgr_(nullptr),
+        block_iter_(&default_block_iter_),
         prefix_extractor_(prefix_extractor),
         lookup_context_(caller),
         block_prefetcher_(
@@ -51,7 +52,12 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     multi_scan_status_.PermitUncheckedError();
   }
 
-  ~BlockBasedTableIterator() override { ClearBlockHandles(); }
+  ~BlockBasedTableIterator() override {
+    ClearBlockHandles();
+    if (OwnsBlockIter()) {
+      delete block_iter_;
+    }
+  }
 
   void Seek(const Slice& target) override;
   void SeekForPrev(const Slice& target) override;
@@ -63,7 +69,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   bool Valid() const override {
     return !is_out_of_bound_ && multi_scan_status_.ok() &&
            (is_at_first_key_from_index_ ||
-            (block_iter_points_to_real_block_ && block_iter_.Valid()));
+            (block_iter_points_to_real_block_ && block_iter_->Valid()));
   }
 
   // For block cache readahead lookup scenario -
@@ -76,7 +82,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
       assert(!multi_scan_read_set_);
       return index_iter_->value().first_internal_key;
     } else {
-      return block_iter_.key();
+      return block_iter_->key();
     }
   }
   Slice user_key() const override {
@@ -84,7 +90,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     if (is_at_first_key_from_index_) {
       return ExtractUserKey(index_iter_->value().first_internal_key);
     } else {
-      return block_iter_.user_key();
+      return block_iter_->user_key();
     }
   }
 
@@ -137,7 +143,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
       seek_stat_state_ = kDataBlockReadSinceLastSeek;
     }
 
-    return block_iter_.value();
+    return block_iter_->value();
   }
   Status status() const override {
     if (!multi_scan_status_.ok()) {
@@ -152,7 +158,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
       return index_iter_->status();
     } else if (block_iter_points_to_real_block_) {
       // This is the common case.
-      return block_iter_.status();
+      return block_iter_->status();
     } else if (async_read_in_progress_) {
       assert(!multi_scan_read_set_);
       return Status::TryAgain("Async read in progress");
@@ -181,7 +187,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
     // or index_iter_'s current *value*.
     return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
            ((is_at_first_key_from_index_ && index_iter_->IsValuePinned()) ||
-            (block_iter_points_to_real_block_ && block_iter_.IsKeyPinned()));
+            (block_iter_points_to_real_block_ && block_iter_->IsKeyPinned()));
   }
   bool IsValuePinned() const override {
     assert(!is_at_first_key_from_index_);
@@ -195,9 +201,9 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   void ResetDataIter() {
     if (block_iter_points_to_real_block_) {
       if (pinned_iters_mgr_ != nullptr && pinned_iters_mgr_->PinningEnabled()) {
-        block_iter_.DelegateCleanupsTo(pinned_iters_mgr_);
+        block_iter_->DelegateCleanupsTo(pinned_iters_mgr_);
       }
-      block_iter_.Invalidate(Status::OK());
+      block_iter_->Invalidate(Status::OK());
       block_iter_points_to_real_block_ = false;
     }
     block_upper_bound_check_ = BlockUpperBound::kUnknown;
@@ -314,13 +320,15 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   };
 
   bool IsIndexAtCurr() const { return is_index_at_curr_block_; }
+  bool OwnsBlockIter() const { return block_iter_ != &default_block_iter_; }
 
   const BlockBasedTable* table_;
   const ReadOptions& read_options_;
   const InternalKeyComparator& icomp_;
   UserComparatorWrapper user_comparator_;
   PinnedIteratorsManager* pinned_iters_mgr_;
-  DataBlockIter block_iter_;
+  DataBlockIter default_block_iter_;
+  DataBlockIter* block_iter_;
   const SliceTransform* prefix_extractor_;
   uint64_t prev_block_offset_ = std::numeric_limits<uint64_t>::max();
   BlockCacheLookupContext lookup_context_;
@@ -380,7 +388,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   // can point to a different block.
   // If Prepare() is called, index_iter_ is used to prefetch data blocks for the
   // multiscan, so is_index_at_curr_block_ will be false.
-  // Whether index is expected to match the current data_block_iter_.
+  // Whether index is expected to match the current data block iterator.
   bool is_index_at_curr_block_ = true;
 
   // *** END States used by both regular scan and multiscan

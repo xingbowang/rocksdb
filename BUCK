@@ -5518,6 +5518,12 @@ cpp_unittest_wrapper(name="repeatable_thread_test",
             extra_compiler_flags=[])
 
 
+cpp_unittest_wrapper(name="rexdb_test",
+            srcs=["table/rexdb_test.cc"],
+            deps=[":rocksdb_test_lib"],
+            extra_compiler_flags=[])
+
+
 cpp_unittest_wrapper(name="ribbon_test",
             srcs=["util/ribbon_test.cc"],
             deps=[":rocksdb_test_lib"],
@@ -5688,6 +5694,12 @@ cpp_unittest_wrapper(name="types_util_test",
 
 cpp_unittest_wrapper(name="udt_util_test",
             srcs=["util/udt_util_test.cc"],
+            deps=[":rocksdb_test_lib"],
+            extra_compiler_flags=[])
+
+
+cpp_unittest_wrapper(name="user_defined_block_test",
+            srcs=["table/user_defined_block_test.cc"],
             deps=[":rocksdb_test_lib"],
             extra_compiler_flags=[])
 

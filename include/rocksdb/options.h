@@ -2388,6 +2388,11 @@ struct ReadOptions {
   // an application level request that results in multiple RocksDB api calls
   const std::string* request_id = nullptr;
 
+  // Opaque per-read argument passed to user-defined data block iterators.
+  // The configured UserDefinedBlockFactory defines the expected type. RocksDB
+  // does not own the pointed-to object; it must outlive the read operation.
+  void* user_defined_block_iterator_arg = nullptr;
+
   // *** END per-request settings for internal team use only ***
 
   ReadOptions() {}
