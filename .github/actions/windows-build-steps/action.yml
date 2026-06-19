@@ -11,8 +11,40 @@ inputs:
 runs:
   using: composite
   steps:
+  - name: Install VS2022 Build Tools
+    shell: pwsh
+    run: |
+      $ErrorActionPreference = "Stop"
+
+      function Find-VS2022WithVCTools {
+        $vswhere = Join-Path ([Environment]::GetFolderPath("ProgramFilesX86")) "Microsoft Visual Studio\Installer\vswhere.exe"
+        if (!(Test-Path $vswhere)) {
+          return ""
+        }
+
+        return (& $vswhere -products * -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath) | Select-Object -First 1
+      }
+
+      $vsInstallPath = Find-VS2022WithVCTools
+      if ($vsInstallPath) {
+        echo "VS2022 C++ Build Tools already available at $vsInstallPath"
+        return
+      }
+
+      choco install visualstudio2022-workload-vctools -y --no-progress --execution-timeout=0 --package-parameters "--includeRecommended --passive --norestart --locale en-US"
+      if(!$?) { Exit $LASTEXITCODE }
+
+      $vsInstallPath = Find-VS2022WithVCTools
+      if (!$vsInstallPath) {
+        Write-Error "VS2022 C++ Build Tools were not found after installation."
+        Exit 1
+      }
+
+      echo "Installed VS2022 C++ Build Tools at $vsInstallPath"
   - name: Add msbuild to PATH
     uses: microsoft/setup-msbuild@v1.3.1
+    with:
+      vs-version: "[17.0,18.0)"
   - name: ccache
     uses: hendrikmuhs/ccache-action@v1.2
     with:
