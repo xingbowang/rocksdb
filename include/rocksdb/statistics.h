@@ -394,6 +394,16 @@ enum Tickers : uint32_t {
   // # of bytes written into blob cache.
   BLOB_DB_CACHE_BYTES_WRITE,
 
+  // Per-file garbage-aware blob GC statistics
+  // # of blob file candidates found for garbage collection
+  BLOB_GC_CANDIDATES_FOUND,
+  // # of blob files collected during garbage collection
+  BLOB_GC_FILES_COLLECTED,
+  // # of bytes reclaimed (garbage) during blob GC
+  BLOB_GC_BYTES_RECLAIMED,
+  // # of bytes relocated (live data) during blob GC
+  BLOB_GC_BYTES_RELOCATED,
+
   // These counters indicate a performance issue in WritePrepared transactions.
   // We should not seem them ticking them much.
   // # of times prepare_mutex_ is acquired in the fast path.

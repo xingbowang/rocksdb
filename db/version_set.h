@@ -250,6 +250,13 @@ class VersionStorageInfo {
       double blob_garbage_collection_force_threshold,
       bool enable_blob_garbage_collection);
 
+  // Per-file garbage-aware version of ComputeFilesMarkedForForcedBlobGC.
+  // Uses BlobGCCandidateSelector to select blob files based on individual
+  // garbage ratios rather than age-based batch selection.
+  //
+  // REQUIRES: DB mutex held
+  void ComputeFilesMarkedForForcedBlobGC(const MutableCFOptions& cf_options);
+
   bool level0_non_overlapping() const { return level0_non_overlapping_; }
 
   // Updates the oldest snapshot and related internal state, like the bottommost

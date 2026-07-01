@@ -61,6 +61,20 @@ enum CompactionPri : char {
   kRoundRobin = 0x4,
 };
 
+// Priority for selecting blob files for garbage collection.
+// Used with per-file garbage-aware blob GC.
+enum class BlobGCPriority : char {
+  // Prioritize blob files with the highest garbage ratio first.
+  // This maximizes space reclamation per file collected.
+  kHighestGarbageRatio = 0x0,
+  // Prioritize blob files with the largest absolute garbage bytes.
+  // This maximizes bytes reclaimed per GC round.
+  kLargestGarbageBytes = 0x1,
+  // Prioritize oldest blob files first (by file number).
+  // This provides predictable, age-based collection order.
+  kOldestFirst = 0x2,
+};
+
 struct FileTemperatureAge {
   Temperature temperature = Temperature::kUnknown;
   uint64_t age = 0;
@@ -1036,6 +1050,54 @@ struct AdvancedColumnFamilyOptions {
   //
   // Dynamically changeable through the SetOptions() API
   double blob_garbage_collection_force_threshold = 1.0;
+
+  // Per-file garbage threshold for blob GC. Blob files with a garbage ratio
+  // (garbage_bytes / total_bytes) greater than or equal to this threshold
+  // are candidates for garbage collection. This enables more targeted GC
+  // compared to age-based selection.
+  //
+  // Note: enable_blob_garbage_collection must be set for this option to have
+  // any effect.
+  //
+  // Default: 0.5 (50% garbage)
+  //
+  // Dynamically changeable through the SetOptions() API
+  double blob_file_garbage_threshold = 0.5;
+
+  // Minimum blob file size (in bytes) for GC consideration. Blob files smaller
+  // than this threshold will not be selected for garbage collection, even if
+  // their garbage ratio exceeds blob_file_garbage_threshold. This avoids
+  // churning small files.
+  //
+  // Note: enable_blob_garbage_collection must be set for this option to have
+  // any effect.
+  //
+  // Default: 64MB
+  //
+  // Dynamically changeable through the SetOptions() API
+  uint64_t min_blob_file_size_for_gc = 64ULL << 20;
+
+  // Maximum number of blob files to collect per GC round. This limits the
+  // amount of work done in a single compaction triggered by blob GC.
+  //
+  // Note: enable_blob_garbage_collection must be set for this option to have
+  // any effect.
+  //
+  // Default: 4
+  //
+  // Dynamically changeable through the SetOptions() API
+  uint32_t max_blob_files_per_gc = 4;
+
+  // Priority for selecting blob files for garbage collection. Determines the
+  // order in which candidate blob files are processed.
+  //
+  // Note: enable_blob_garbage_collection must be set for this option to have
+  // any effect.
+  //
+  // Default: kHighestGarbageRatio
+  //
+  // Dynamically changeable through the SetOptions() API
+  BlobGCPriority blob_gc_priority = BlobGCPriority::kHighestGarbageRatio;
 
   // Compaction readahead for blob files.
   //

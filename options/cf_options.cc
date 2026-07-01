@@ -621,6 +621,22 @@ static std::unordered_map<std::string, OptionTypeInfo>
                    blob_garbage_collection_force_threshold),
           OptionType::kDouble, OptionVerificationType::kNormal,
           OptionTypeFlags::kMutable}},
+        {"blob_file_garbage_threshold",
+         {offsetof(struct MutableCFOptions, blob_file_garbage_threshold),
+          OptionType::kDouble, OptionVerificationType::kNormal,
+          OptionTypeFlags::kMutable}},
+        {"min_blob_file_size_for_gc",
+         {offsetof(struct MutableCFOptions, min_blob_file_size_for_gc),
+          OptionType::kUInt64T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kMutable}},
+        {"max_blob_files_per_gc",
+         {offsetof(struct MutableCFOptions, max_blob_files_per_gc),
+          OptionType::kUInt32T, OptionVerificationType::kNormal,
+          OptionTypeFlags::kMutable}},
+        {"blob_gc_priority",
+         OptionTypeInfo::Enum<BlobGCPriority>(
+             offsetof(struct MutableCFOptions, blob_gc_priority),
+             &blob_gc_priority_string_map, OptionTypeFlags::kMutable)},
         {"blob_compaction_readahead_size",
          {offsetof(struct MutableCFOptions, blob_compaction_readahead_size),
           OptionType::kUInt64T, OptionVerificationType::kNormal,
@@ -1275,6 +1291,14 @@ void MutableCFOptions::Dump(Logger* log) const {
                  blob_garbage_collection_age_cutoff);
   ROCKS_LOG_INFO(log, "  blob_garbage_collection_force_threshold: %f",
                  blob_garbage_collection_force_threshold);
+  ROCKS_LOG_INFO(log, "            blob_file_garbage_threshold: %f",
+                 blob_file_garbage_threshold);
+  ROCKS_LOG_INFO(log, "              min_blob_file_size_for_gc: %" PRIu64,
+                 min_blob_file_size_for_gc);
+  ROCKS_LOG_INFO(log, "                  max_blob_files_per_gc: %u",
+                 max_blob_files_per_gc);
+  ROCKS_LOG_INFO(log, "                       blob_gc_priority: %d",
+                 static_cast<int>(blob_gc_priority));
   ROCKS_LOG_INFO(log, "           blob_compaction_readahead_size: %" PRIu64,
                  blob_compaction_readahead_size);
   ROCKS_LOG_INFO(log, "                 blob_file_starting_level: %d",

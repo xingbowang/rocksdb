@@ -4487,6 +4487,17 @@ void InitializeOptionsFromFlags(
       FLAGS_blob_garbage_collection_age_cutoff;
   options.blob_garbage_collection_force_threshold =
       FLAGS_blob_garbage_collection_force_threshold;
+  options.blob_file_garbage_threshold = FLAGS_blob_file_garbage_threshold;
+  options.min_blob_file_size_for_gc = FLAGS_min_blob_file_size_for_gc;
+  options.max_blob_files_per_gc = FLAGS_max_blob_files_per_gc;
+  // Parse blob_gc_priority from string
+  if (FLAGS_blob_gc_priority == "kHighestGarbageRatio") {
+    options.blob_gc_priority = BlobGCPriority::kHighestGarbageRatio;
+  } else if (FLAGS_blob_gc_priority == "kLargestGarbageBytes") {
+    options.blob_gc_priority = BlobGCPriority::kLargestGarbageBytes;
+  } else if (FLAGS_blob_gc_priority == "kOldestFirst") {
+    options.blob_gc_priority = BlobGCPriority::kOldestFirst;
+  }
   options.blob_compaction_readahead_size = FLAGS_blob_compaction_readahead_size;
   options.blob_file_starting_level = FLAGS_blob_file_starting_level;
 

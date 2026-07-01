@@ -34,6 +34,7 @@ cpp_library_wrapper(name="rocksdb_lib", srcs=[
         "db/blob/blob_file_meta.cc",
         "db/blob/blob_file_reader.cc",
         "db/blob/blob_garbage_meter.cc",
+        "db/blob/blob_gc_candidate_selector.cc",
         "db/blob/blob_log_format.cc",
         "db/blob/blob_log_sequential_reader.cc",
         "db/blob/blob_log_writer.cc",
@@ -4535,6 +4536,12 @@ cpp_unittest_wrapper(name="blob_file_garbage_test",
             extra_compiler_flags=[])
 
 
+cpp_unittest_wrapper(name="blob_file_meta_test",
+            srcs=["db/blob/blob_file_meta_test.cc"],
+            deps=[":rocksdb_test_lib"],
+            extra_compiler_flags=[])
+
+
 cpp_unittest_wrapper(name="blob_file_reader_test",
             srcs=["db/blob/blob_file_reader_test.cc"],
             deps=[":rocksdb_test_lib"],
@@ -4543,6 +4550,12 @@ cpp_unittest_wrapper(name="blob_file_reader_test",
 
 cpp_unittest_wrapper(name="blob_garbage_meter_test",
             srcs=["db/blob/blob_garbage_meter_test.cc"],
+            deps=[":rocksdb_test_lib"],
+            extra_compiler_flags=[])
+
+
+cpp_unittest_wrapper(name="blob_gc_candidate_selector_test",
+            srcs=["db/blob/blob_gc_candidate_selector_test.cc"],
             deps=[":rocksdb_test_lib"],
             extra_compiler_flags=[])
 

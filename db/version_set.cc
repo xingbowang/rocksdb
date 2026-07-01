@@ -24,6 +24,7 @@
 #include "db/blob/blob_fetcher.h"
 #include "db/blob/blob_file_cache.h"
 #include "db/blob/blob_file_reader.h"
+#include "db/blob/blob_gc_candidate_selector.h"
 #include "db/blob/blob_log_format.h"
 #include "db/blob/blob_source.h"
 #include "db/compaction/compaction.h"
@@ -3943,10 +3944,8 @@ void VersionStorageInfo::ComputeCompactionScore(
   ComputeFilesMarkedForPeriodicCompaction(
       immutable_options, mutable_cf_options.periodic_compaction_seconds,
       max_output_level);
-  ComputeFilesMarkedForForcedBlobGC(
-      mutable_cf_options.blob_garbage_collection_age_cutoff,
-      mutable_cf_options.blob_garbage_collection_force_threshold,
-      mutable_cf_options.enable_blob_garbage_collection);
+  // Use the new per-file garbage-aware blob GC selection
+  ComputeFilesMarkedForForcedBlobGC(mutable_cf_options);
 
   EstimateCompactionBytesNeeded(mutable_cf_options);
 }
@@ -4167,6 +4166,71 @@ void VersionStorageInfo::ComputeFilesMarkedForForcedBlobGC(
     }
 
     files_marked_for_forced_blob_gc_.emplace_back(level, sst_meta);
+  }
+}
+
+void VersionStorageInfo::ComputeFilesMarkedForForcedBlobGC(
+    const MutableCFOptions& cf_options) {
+  files_marked_for_forced_blob_gc_.clear();
+
+  if (!cf_options.enable_blob_garbage_collection) {
+    return;
+  }
+
+  if (blob_files_.empty()) {
+    return;
+  }
+
+  // Use the new per-file garbage-aware selection
+  BlobGCCandidateSelector selector(
+      cf_options.blob_file_garbage_threshold,
+      cf_options.min_blob_file_size_for_gc,
+      cf_options.max_blob_files_per_gc, cf_options.blob_gc_priority);
+
+  // Convert blob_files_ vector to map format expected by selector
+  BlobGCCandidateSelector::BlobFiles blob_file_map;
+  for (const auto& meta : blob_files_) {
+    if (meta) {
+      blob_file_map[meta->GetBlobFileNumber()] = meta;
+    }
+  }
+
+  const auto candidates = selector.SelectCandidates(blob_file_map);
+
+  if (candidates.empty()) {
+    return;
+  }
+
+  // For each selected blob file, mark its linked SSTs for compaction
+  for (const auto& candidate : candidates) {
+    // Find the blob file metadata
+    auto it = blob_file_map.find(candidate.blob_file_number);
+    if (it == blob_file_map.end()) {
+      continue;
+    }
+
+    const auto& meta = it->second;
+    const auto& linked_ssts = meta->GetLinkedSsts();
+
+    for (uint64_t sst_file_number : linked_ssts) {
+      const FileLocation location = GetFileLocation(sst_file_number);
+      if (!location.IsValid()) {
+        continue;
+      }
+
+      const int level = location.GetLevel();
+      assert(level >= 0);
+
+      const size_t pos = location.GetPosition();
+      FileMetaData* const sst_meta = files_[level][pos];
+      assert(sst_meta);
+
+      if (sst_meta->being_compacted) {
+        continue;
+      }
+
+      files_marked_for_forced_blob_gc_.emplace_back(level, sst_meta);
+    }
   }
 }
 

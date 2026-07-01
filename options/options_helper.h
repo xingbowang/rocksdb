@@ -95,6 +95,8 @@ struct OptionsHelper {
       compaction_style_string_map;
   static std::unordered_map<std::string, CompactionPri>
       compaction_pri_string_map;
+  static std::unordered_map<std::string, BlobGCPriority>
+      blob_gc_priority_string_map;
   static std::unordered_map<std::string, Temperature> temperature_string_map;
 };
 
@@ -115,6 +117,8 @@ static auto& compaction_style_string_map =
     OptionsHelper::compaction_style_string_map;
 static auto& compaction_pri_string_map =
     OptionsHelper::compaction_pri_string_map;
+static auto& blob_gc_priority_string_map =
+    OptionsHelper::blob_gc_priority_string_map;
 static auto& temperature_string_map = OptionsHelper::temperature_string_map;
 static auto& prepopulate_blob_cache_string_map =
     OptionsHelper::prepopulate_blob_cache_string_map;

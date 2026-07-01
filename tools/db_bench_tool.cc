@@ -1104,6 +1104,27 @@ DEFINE_double(blob_garbage_collection_force_threshold,
               "[Integrated BlobDB] The threshold for the ratio of garbage in "
               "the eligible blob files for forcing garbage collection.");
 
+DEFINE_double(blob_file_garbage_threshold,
+              ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions()
+                  .blob_file_garbage_threshold,
+              "[Integrated BlobDB] Per-file garbage ratio threshold for GC. "
+              "Blob files with garbage ratio >= this value are candidates.");
+
+DEFINE_uint64(min_blob_file_size_for_gc,
+              ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions()
+                  .min_blob_file_size_for_gc,
+              "[Integrated BlobDB] Minimum blob file size for GC consideration.");
+
+DEFINE_uint32(max_blob_files_per_gc,
+              ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions()
+                  .max_blob_files_per_gc,
+              "[Integrated BlobDB] Maximum number of blob files to collect per "
+              "GC round.");
+
+DEFINE_string(blob_gc_priority, "kHighestGarbageRatio",
+              "[Integrated BlobDB] Priority for selecting blob files for GC. "
+              "Options: kHighestGarbageRatio, kLargestGarbageBytes, kOldestFirst.");
+
 DEFINE_uint64(blob_compaction_readahead_size,
               ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions()
                   .blob_compaction_readahead_size,
@@ -4914,6 +4935,17 @@ class Benchmark {
         FLAGS_blob_garbage_collection_age_cutoff;
     options.blob_garbage_collection_force_threshold =
         FLAGS_blob_garbage_collection_force_threshold;
+    options.blob_file_garbage_threshold = FLAGS_blob_file_garbage_threshold;
+    options.min_blob_file_size_for_gc = FLAGS_min_blob_file_size_for_gc;
+    options.max_blob_files_per_gc = FLAGS_max_blob_files_per_gc;
+    // Parse blob_gc_priority from string
+    if (FLAGS_blob_gc_priority == "kHighestGarbageRatio") {
+      options.blob_gc_priority = BlobGCPriority::kHighestGarbageRatio;
+    } else if (FLAGS_blob_gc_priority == "kLargestGarbageBytes") {
+      options.blob_gc_priority = BlobGCPriority::kLargestGarbageBytes;
+    } else if (FLAGS_blob_gc_priority == "kOldestFirst") {
+      options.blob_gc_priority = BlobGCPriority::kOldestFirst;
+    }
     options.blob_compaction_readahead_size =
         FLAGS_blob_compaction_readahead_size;
     options.blob_file_starting_level = FLAGS_blob_file_starting_level;

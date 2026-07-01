@@ -145,6 +145,25 @@ class BlobFileMetaData {
   uint64_t GetGarbageBlobCount() const { return garbage_blob_count_; }
   uint64_t GetGarbageBlobBytes() const { return garbage_blob_bytes_; }
 
+  // Returns the ratio of garbage bytes to total bytes in the blob file.
+  // Returns 0.0 if the file has no bytes.
+  double GetGarbageRatio() const {
+    const uint64_t total = GetTotalBlobBytes();
+    if (total == 0) {
+      return 0.0;
+    }
+    return static_cast<double>(GetGarbageBlobBytes()) /
+           static_cast<double>(total);
+  }
+
+  // Returns true if this blob file is a candidate for garbage collection.
+  // A blob file is a GC candidate if:
+  // 1. Its total size is at least min_size bytes
+  // 2. Its garbage ratio is at least threshold
+  bool IsGCCandidate(double threshold, uint64_t min_size) const {
+    return GetTotalBlobBytes() >= min_size && GetGarbageRatio() >= threshold;
+  }
+
   std::string DebugString() const;
 
  private:

@@ -1916,6 +1916,9 @@ blob_file_cache_test: $(OBJ_DIR)/db/blob/blob_file_cache_test.o $(TEST_LIBRARY) 
 blob_file_garbage_test: $(OBJ_DIR)/db/blob/blob_file_garbage_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+blob_file_meta_test: $(OBJ_DIR)/db/blob/blob_file_meta_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 blob_file_reader_test: $(OBJ_DIR)/db/blob/blob_file_reader_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
@@ -1923,6 +1926,9 @@ blob_source_test: $(OBJ_DIR)/db/blob/blob_source_test.o $(TEST_LIBRARY) $(LIBRAR
 	$(AM_LINK)
 
 blob_garbage_meter_test: $(OBJ_DIR)/db/blob/blob_garbage_meter_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
+blob_gc_candidate_selector_test: $(OBJ_DIR)/db/blob/blob_gc_candidate_selector_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
 io_dispatcher_test: $(OBJ_DIR)/util/io_dispatcher_test.o $(TEST_LIBRARY) $(LIBRARY)

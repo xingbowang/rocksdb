@@ -155,6 +155,10 @@ struct MutableCFOptions {
             options.blob_garbage_collection_age_cutoff),
         blob_garbage_collection_force_threshold(
             options.blob_garbage_collection_force_threshold),
+        blob_file_garbage_threshold(options.blob_file_garbage_threshold),
+        min_blob_file_size_for_gc(options.min_blob_file_size_for_gc),
+        max_blob_files_per_gc(options.max_blob_files_per_gc),
+        blob_gc_priority(options.blob_gc_priority),
         blob_compaction_readahead_size(options.blob_compaction_readahead_size),
         blob_file_starting_level(options.blob_file_starting_level),
         prepopulate_blob_cache(options.prepopulate_blob_cache),
@@ -225,6 +229,10 @@ struct MutableCFOptions {
         enable_blob_garbage_collection(false),
         blob_garbage_collection_age_cutoff(0.0),
         blob_garbage_collection_force_threshold(0.0),
+        blob_file_garbage_threshold(0.5),
+        min_blob_file_size_for_gc(64ULL << 20),
+        max_blob_files_per_gc(4),
+        blob_gc_priority(BlobGCPriority::kHighestGarbageRatio),
         blob_compaction_readahead_size(0),
         blob_file_starting_level(0),
         prepopulate_blob_cache(PrepopulateBlobCache::kDisable),
@@ -329,6 +337,10 @@ struct MutableCFOptions {
   bool enable_blob_garbage_collection;
   double blob_garbage_collection_age_cutoff;
   double blob_garbage_collection_force_threshold;
+  double blob_file_garbage_threshold;
+  uint64_t min_blob_file_size_for_gc;
+  uint32_t max_blob_files_per_gc;
+  BlobGCPriority blob_gc_priority;
   uint64_t blob_compaction_readahead_size;
   int blob_file_starting_level;
   PrepopulateBlobCache prepopulate_blob_cache;

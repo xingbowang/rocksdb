@@ -24,6 +24,7 @@ LIB_SOURCES =                                                   \
   db/blob/blob_file_meta.cc                                     \
   db/blob/blob_file_reader.cc                                   \
   db/blob/blob_garbage_meter.cc                                 \
+  db/blob/blob_gc_candidate_selector.cc                         \
   db/blob/blob_log_format.cc                                    \
   db/blob/blob_log_sequential_reader.cc                         \
   db/blob/blob_log_writer.cc                                    \
@@ -468,8 +469,10 @@ TEST_MAIN_SOURCES =                                                     \
   db/blob/blob_file_builder_test.cc                                     \
   db/blob/blob_file_cache_test.cc                                       \
   db/blob/blob_file_garbage_test.cc                                     \
+  db/blob/blob_file_meta_test.cc                                        \
   db/blob/blob_file_reader_test.cc                                      \
   db/blob/blob_garbage_meter_test.cc                                    \
+  db/blob/blob_gc_candidate_selector_test.cc                            \
   db/blob/blob_source_test.cc                                           \
   db/blob/db_blob_basic_test.cc                                         \
   db/blob/db_blob_compaction_test.cc                                    \

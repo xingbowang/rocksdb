@@ -963,6 +963,12 @@ std::unordered_map<std::string, CompactionPri>
         {"kMinOverlappingRatio", kMinOverlappingRatio},
         {"kRoundRobin", kRoundRobin}};
 
+std::unordered_map<std::string, BlobGCPriority>
+    OptionsHelper::blob_gc_priority_string_map = {
+        {"kHighestGarbageRatio", BlobGCPriority::kHighestGarbageRatio},
+        {"kLargestGarbageBytes", BlobGCPriority::kLargestGarbageBytes},
+        {"kOldestFirst", BlobGCPriority::kOldestFirst}};
+
 std::unordered_map<std::string, CompactionStopStyle>
     OptionsHelper::compaction_stop_style_string_map = {
         {"kCompactionStopStyleSimilarSize", kCompactionStopStyleSimilarSize},
