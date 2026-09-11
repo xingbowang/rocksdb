@@ -257,11 +257,6 @@ bool RunStressTestImpl(SharedState* shared) {
     threads[0]->stats.Report((db_label + "Stress Test").c_str());
   }
 
-  for (unsigned int i = 0; i < n; i++) {
-    delete threads[i];
-    threads[i] = nullptr;
-  }
-
   now = clock->NowMicros();
   if (!FLAGS_skip_verifydb && !FLAGS_test_batches_snapshots &&
       !shared->HasVerificationFailedYet()) {
@@ -287,6 +282,17 @@ bool RunStressTestImpl(SharedState* shared) {
   now = clock->NowMicros();
   fprintf(stdout, "%s %sStress test bg threads finished\n",
           clock->TimeToString(now / 1000000).c_str(), db_label.c_str());
+
+  if (shared->HasVerificationFailedYet()) {
+    for (ThreadState* thread : threads) {
+      thread->FlushOperationBreadcrumbsOnVerificationFailure();
+    }
+  }
+
+  for (unsigned int i = 0; i < n; i++) {
+    delete threads[i];
+    threads[i] = nullptr;
+  }
 
   assert(remote_compaction_worker_threads.size() ==
          remote_compaction_worker_thread_count);

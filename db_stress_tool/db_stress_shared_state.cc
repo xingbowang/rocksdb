@@ -12,9 +12,58 @@
 #include "db_stress_tool/db_stress_shared_state.h"
 
 #include "db_stress_tool/db_stress_test_base.h"
+#include "port/port.h"
 #include "rocksdb/env.h"
 
 namespace ROCKSDB_NAMESPACE {
+namespace {
+
+std::string SanitizePathComponent(const std::string& value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char c : value) {
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+      result.push_back(c);
+    } else {
+      result.push_back('_');
+    }
+  }
+  return result;
+}
+
+std::string SanitizeRecordValue(const std::string& value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char c : value) {
+    if (c == '\n' || c == '\r' || c == '\t') {
+      result.push_back(' ');
+    } else {
+      result.push_back(c);
+    }
+  }
+  return result;
+}
+
+std::string OperationBreadcrumbFilePath(const ThreadState& thread) {
+  std::string path = FLAGS_stress_diagnostics_dir;
+  if (!path.empty() && path.back() != '/') {
+    path.push_back('/');
+  }
+  const StressTest* const stress_test = thread.shared->GetStressTest();
+  const std::string db_label =
+      stress_test ? stress_test->GetDbLabel() : "unknown_db";
+  path.append(SanitizePathComponent(db_label));
+  path.append(".pid_");
+  path.append(std::to_string(port::GetProcessID()));
+  path.append(".thread_");
+  path.append(std::to_string(thread.tid));
+  path.append(".breadcrumbs.txt");
+  return path;
+}
+
+}  // namespace
+
 thread_local bool SharedState::ignore_read_error;
 
 SharedState::SharedState(Env* env, StressTest* stress_test)
@@ -132,6 +181,180 @@ bool SharedState::BeginOperation(uint32_t tid, StressOperationType type) {
   state.active_type.store(static_cast<uint32_t>(type),
                           std::memory_order_release);
   return true;
+}
+
+ThreadState::ThreadState(uint32_t index, SharedState* _shared)
+    : tid(index),
+      rand(1000 + index + _shared->GetSeed()),
+      shared(_shared),
+      operation_breadcrumb_pos(0),
+      operation_breadcrumb_wrapped(false),
+      diagnostic_io_disabled(false),
+      operation_breadcrumb_failure_flushed(false),
+      operation_ordinal(0),
+      current_operation_ordinal(0) {
+  if (OperationBreadcrumbsEnabled()) {
+    operation_breadcrumbs.resize(
+        static_cast<size_t>(FLAGS_stress_diagnostics_breadcrumb_entries));
+  }
+}
+
+bool ThreadState::OperationBreadcrumbsEnabled() const {
+  return FLAGS_stress_diagnostics_breadcrumbs &&
+         FLAGS_stress_diagnostics_breadcrumb_entries > 0;
+}
+
+StressDiagnosticRecord& ThreadState::AppendOperationBreadcrumb(
+    StressOperationType type, const char* phase) {
+  assert(OperationBreadcrumbsEnabled());
+  assert(!operation_breadcrumbs.empty());
+
+  StressDiagnosticRecord& record =
+      operation_breadcrumbs[operation_breadcrumb_pos];
+  record.operation_ordinal = current_operation_ordinal;
+  record.timestamp_micros = shared->GetEnv()->NowMicros();
+  record.operation_type = type;
+  record.phase = phase;
+  record.details.clear();
+
+  operation_breadcrumb_pos =
+      (operation_breadcrumb_pos + 1) % operation_breadcrumbs.size();
+  if (operation_breadcrumb_pos == 0) {
+    operation_breadcrumb_wrapped = true;
+  }
+  return record;
+}
+
+std::string* ThreadState::RecordOperationEvent(StressOperationType type) {
+  if (!OperationBreadcrumbsEnabled() || operation_breadcrumbs.empty()) {
+    return nullptr;
+  }
+  return &AppendOperationBreadcrumb(type, "event").details;
+}
+
+bool ThreadState::BeginOperation(StressOperationType type) {
+  ++operation_ordinal;
+  current_operation_ordinal = operation_ordinal;
+
+  if (OperationBreadcrumbsEnabled() && !operation_breadcrumbs.empty()) {
+    AppendOperationBreadcrumb(type, "begin");
+  }
+
+  if (LivenessTrackingEnabled()) {
+    return shared->BeginOperation(tid, type);
+  }
+  return false;
+}
+
+void ThreadState::RecordOperationEnd(StressOperationType type) {
+  if (!OperationBreadcrumbsEnabled() || operation_breadcrumbs.empty()) {
+    return;
+  }
+  StressDiagnosticRecord& record = AppendOperationBreadcrumb(type, "end");
+
+  const bool verification_failed = shared->HasVerificationFailedYet();
+  record.details = verification_failed ? "verification_failure=1" : "";
+
+  if (verification_failed) {
+    FlushOperationBreadcrumbsOnVerificationFailure();
+    return;
+  }
+
+  if (FLAGS_stress_diagnostics_breadcrumb_flush_every > 0 &&
+      current_operation_ordinal %
+              FLAGS_stress_diagnostics_breadcrumb_flush_every ==
+          0) {
+    FlushOperationBreadcrumbs("periodic");
+  }
+}
+
+void ThreadState::FlushOperationBreadcrumbsOnVerificationFailure() {
+  if (operation_breadcrumb_failure_flushed) {
+    return;
+  }
+  operation_breadcrumb_failure_flushed = true;
+  FlushOperationBreadcrumbs("verification_failure");
+}
+
+void ThreadState::FlushOperationBreadcrumbs(const char* reason) {
+  if (!OperationBreadcrumbsEnabled() || operation_breadcrumbs.empty() ||
+      diagnostic_io_disabled || FLAGS_stress_diagnostics_dir.empty() ||
+      (!operation_breadcrumb_wrapped && operation_breadcrumb_pos == 0)) {
+    return;
+  }
+
+  Env* const env = Env::Default();
+  Status s = env->CreateDirIfMissing(FLAGS_stress_diagnostics_dir);
+  if (!s.ok()) {
+    fprintf(stdout, "Failed to create stress diagnostics directory %s: %s\n",
+            FLAGS_stress_diagnostics_dir.c_str(), s.ToString().c_str());
+    diagnostic_io_disabled = true;
+    return;
+  }
+
+  const std::string path = OperationBreadcrumbFilePath(*this);
+  const std::string temp_path = path + ".tmp";
+  std::unique_ptr<WritableFile> file;
+  s = env->NewWritableFile(temp_path, &file, EnvOptions());
+  if (!s.ok()) {
+    fprintf(stdout, "Failed to create operation breadcrumb file %s: %s\n",
+            temp_path.c_str(), s.ToString().c_str());
+    diagnostic_io_disabled = true;
+    return;
+  }
+
+  std::string output;
+  output.append("# reason=");
+  output.append(reason ? reason : "unknown");
+  output.append(" pid=");
+  output.append(std::to_string(port::GetProcessID()));
+  output.append(" tid=");
+  output.append(std::to_string(tid));
+  output.append(" seed=");
+  output.append(std::to_string(shared->GetSeed()));
+  output.push_back('\n');
+
+  const size_t entry_count = operation_breadcrumb_wrapped
+                                 ? operation_breadcrumbs.size()
+                                 : operation_breadcrumb_pos;
+  const size_t first_entry =
+      operation_breadcrumb_wrapped ? operation_breadcrumb_pos : 0;
+  for (size_t i = 0; i < entry_count; ++i) {
+    const size_t index = (first_entry + i) % operation_breadcrumbs.size();
+    const StressDiagnosticRecord& record = operation_breadcrumbs[index];
+    output.append("time_micros=");
+    output.append(std::to_string(record.timestamp_micros));
+    output.append(" tid=");
+    output.append(std::to_string(tid));
+    output.append(" ordinal=");
+    output.append(std::to_string(record.operation_ordinal));
+    output.append(" op=");
+    output.append(StressOperationTypeName(record.operation_type));
+    output.append(" phase=");
+    output.append(record.phase);
+    if (!record.details.empty()) {
+      output.push_back(' ');
+      output.append(SanitizeRecordValue(record.details));
+    }
+    output.push_back('\n');
+  }
+
+  Status write_status = file->Append(Slice(output));
+  Status close_status = file->Close();
+  file.reset();
+  if (!write_status.ok()) {
+    s = write_status;
+  } else if (!close_status.ok()) {
+    s = close_status;
+  } else {
+    s = env->RenameFile(temp_path, path);
+  }
+  if (!s.ok()) {
+    env->DeleteFile(temp_path).PermitUncheckedError();
+    fprintf(stdout, "Failed to write operation breadcrumb file %s: %s\n",
+            path.c_str(), s.ToString().c_str());
+    diagnostic_io_disabled = true;
+  }
 }
 
 bool SharedState::ShouldVerifyAtBeginning() const {
