@@ -14,6 +14,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "db_stress_tool/db_stress_stat.h"
 #include "db_stress_tool/expected_state.h"
@@ -37,6 +39,10 @@ DECLARE_bool(error_recovery_with_no_fault_injection);
 DECLARE_bool(sync_fault_injection);
 DECLARE_uint64(liveness_check_interval_sec);
 DECLARE_uint64(liveness_no_progress_timeout_sec);
+DECLARE_string(stress_diagnostics_dir);
+DECLARE_bool(stress_diagnostics_breadcrumbs);
+DECLARE_uint64(stress_diagnostics_breadcrumb_entries);
+DECLARE_uint64(stress_diagnostics_breadcrumb_flush_every);
 DECLARE_int32(range_deletion_width);
 DECLARE_bool(disable_wal);
 DECLARE_int32(manual_wal_flush_one_in);
@@ -186,6 +192,14 @@ struct ThreadOperationState {
   std::atomic<uint64_t> started_micros;
 };
 
+struct StressDiagnosticRecord {
+  uint64_t operation_ordinal;
+  uint64_t timestamp_micros;
+  StressOperationType operation_type;
+  std::string phase;
+  std::string details;
+};
+
 struct RemoteCompactionQueueItem {
   std::string job_id;
   CompactionServiceJobInfo job_info;
@@ -283,6 +297,8 @@ class SharedState {
   void SetVerificationFailure() { verification_failure_.store(true); }
 
   bool HasVerificationFailedYet() const { return verification_failure_.load(); }
+
+  Env* GetEnv() const { return env_; }
 
   void IncFinishedOps() {
     finished_ops_.fetch_add(1, std::memory_order_relaxed);
@@ -707,6 +723,13 @@ struct ThreadState {
   Random rand;   // Has different seeds for different threads
   SharedState* shared;
   Stats stats;
+  std::vector<StressDiagnosticRecord> operation_breadcrumbs;
+  size_t operation_breadcrumb_pos;
+  bool operation_breadcrumb_wrapped;
+  bool diagnostic_io_disabled;
+  bool operation_breadcrumb_failure_flushed;
+  uint64_t operation_ordinal;
+  uint64_t current_operation_ordinal;
   struct SnapshotState {
     const Snapshot* snapshot;
     // The cf from which we did a Get at this snapshot
@@ -726,20 +749,14 @@ struct ThreadState {
   };
   std::queue<std::pair<uint64_t, SnapshotState>> snapshot_queue;
 
-  ThreadState(uint32_t index, SharedState* _shared)
-      : tid(index), rand(1000 + index + _shared->GetSeed()), shared(_shared) {}
+  ThreadState(uint32_t index, SharedState* _shared);
 
   bool LivenessTrackingEnabled() const {
     return FLAGS_liveness_check_interval_sec > 0 &&
            FLAGS_liveness_no_progress_timeout_sec > 0;
   }
 
-  bool BeginOperation(StressOperationType type) {
-    if (LivenessTrackingEnabled()) {
-      return shared->BeginOperation(tid, type);
-    }
-    return false;
-  }
+  bool BeginOperation(StressOperationType type);
 
   bool EndOperation(StressOperationType type) {
     if (LivenessTrackingEnabled()) {
@@ -753,6 +770,16 @@ struct ThreadState {
       shared->ClearOperation(tid);
     }
   }
+
+  bool OperationBreadcrumbsEnabled() const;
+
+  std::string* RecordOperationEvent(StressOperationType type);
+
+  void RecordOperationEnd(StressOperationType type);
+
+  void FlushOperationBreadcrumbsOnVerificationFailure();
+
+  void FlushOperationBreadcrumbs(const char* reason);
 
   void CompletedOpForDiagnostics(StressOperationType type) {
     if (LivenessTrackingEnabled()) {
@@ -771,6 +798,10 @@ struct ThreadState {
     RecordSingleOpFinished();
     ClearOperation();
   }
+
+ private:
+  StressDiagnosticRecord& AppendOperationBreadcrumb(StressOperationType type,
+                                                    const char* phase);
 };
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // GFLAGS
