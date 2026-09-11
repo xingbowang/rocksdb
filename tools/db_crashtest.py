@@ -275,6 +275,8 @@ default_params = {
     "stress_diagnostics_breadcrumbs": 1,
     "stress_diagnostics_breadcrumb_entries": 256,
     "stress_diagnostics_breadcrumb_flush_every": 1000,
+    "stress_diagnostics_scan_witness": 1,
+    "stress_diagnostics_scan_witness_entries": 128,
     "num_dbs": 1,
     "enable_pipelined_write": lambda: random.randint(0, 1),
     "enable_compaction_filter": lambda: random.choice([0, 0, 0, 1]),
@@ -753,7 +755,10 @@ def get_diagnostics_dir():
 
 
 def stress_diagnostics_enabled(params):
-    return params.get("stress_diagnostics_breadcrumbs", 0) == 1
+    return (
+        params.get("stress_diagnostics_breadcrumbs", 0) == 1
+        or params.get("stress_diagnostics_scan_witness", 0) == 1
+    )
 
 
 def set_default_stress_diagnostics_dir(params):
