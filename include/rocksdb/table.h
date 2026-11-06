@@ -502,7 +502,23 @@ struct BlockBasedTableOptions {
   // (iii) Compatible existing behavior:
   // Same as kDisabled.
   //
-  // (e) Other CacheEntryRole
+  // (e) CacheEntryRole::kReadaheadBuffer
+  // (i) If kEnabled:
+  // Charge memory usage of the readahead (prefetch) buffers used when reading
+  // block-based table files, e.g. by iterator and compaction readahead.
+  // Charging is best effort: if such memory exceeds the available space left in
+  // the block cache at some point (i.e, causing a cache full under
+  // `LRUCacheOptions::strict_capacity_limit` = true), that memory is not
+  // charged and the read continues. Note that, like other charged memory, the
+  // charged space is not available for blocks, so under
+  // `strict_capacity_limit` = true a full cache can still make a block cache
+  // insertion, and so the read, fail with Status::MemoryLimit().
+  // (ii) If kDisabled:
+  // Does not charge the memory usage mentioned above.
+  // (iii) Compatible existing behavior:
+  // Same as kDisabled.
+  //
+  // (f) Other CacheEntryRole
   // Not supported.
   // `Status::kNotSupported` will be returned if
   // `CacheEntryRoleOptions::charged` is set to {`kEnabled`, `kDisabled`}.
