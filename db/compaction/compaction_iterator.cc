@@ -912,6 +912,16 @@ bool CompactionIterator::SelectMergeOutput(uint8_t valid_context) {
     }
     merge_out_iter_.Next();
   }
+  // Returning false means that no merge output is selected. The loop above can
+  // also stop early, with outputs left, when the DB is shutting down or a
+  // manual compaction is paused. PrefilterUncombinedOutputs() may then have
+  // left this iterator valid on the last output of the batch. The value of that
+  // output can point into the pinned blocks that are released below, so the
+  // caller must not return it. Invalidate merge_out_iter_ and this iterator.
+  // NextFromInput() then reports ShutdownInProgress (or Incomplete for a
+  // pause), and NextImpl() does not step through this batch again.
+  merge_out_iter_.Invalidate();
+  validity_info_.Invalidate();
   if (merge_until_status_.IsMergeInProgress()) {
     has_current_user_key_ = false;
   }

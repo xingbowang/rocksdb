@@ -1,0 +1,1 @@
+Fixed a compaction with a merge-before-filter compaction filter (see `CompactionFilter::GetMergeOrder()`) that could read a merge operand from memory that was no longer pinned when the DB started closing during the compaction. The output of such a compaction was never installed.
