@@ -30,7 +30,16 @@ namespace ROCKSDB_NAMESPACE {
 
 namespace {
 
-Env::IOActivity GetCurrentThreadIOActivityForMetadataRead() {
+// Returns the IOActivity that matches the operation of the current thread.
+// Obsolete-file cleanup runs in the thread that triggers it: a flush or
+// compaction thread, DB open, or a user operation that drops the last reference
+// to a SuperVersion (for example, an iterator destructor). Cleanup I/O, such as
+// the footer probe of blob files and WAL closes, tags its IOOptions with this
+// value, so that a FileSystem sees the same activity for all I/O of one
+// operation. Threads without a tracked operation get kUnknown. Flush and
+// compaction jobs reset the thread operation before their cleanup runs, so
+// their cleanup I/O also gets kUnknown.
+Env::IOActivity GetCurrentThreadIOActivity() {
   switch (ThreadStatusUtil::GetThreadOperation()) {
     case ThreadStatus::OperationType::OP_FLUSH:
       return Env::IOActivity::kFlush;
@@ -79,7 +88,7 @@ bool ShouldKeepFooterlessBlobFile(FileSystem* fs,
   // thread activity so db_stress keeps validating the read against the active
   // operation instead of seeing an unexpected kUnknown metadata read.
   IOOptions io_options;
-  io_options.io_activity = GetCurrentThreadIOActivityForMetadataRead();
+  io_options.io_activity = GetCurrentThreadIOActivity();
   uint64_t file_size = 0;
   IOStatus io_s = fs->GetFileSize(blob_file_path, io_options, &file_size, dbg);
   if (!io_s.ok()) {
@@ -469,8 +478,10 @@ void DBImpl::FindObsoleteFiles(JobContext* job_context, bool force,
         log.PrepareForSync();
         wal_write_mutex_.Unlock();
         // TODO: maybe check the return value of Close.
-        // TODO: plumb Env::IOActivity, Env::IOPriority
-        auto s = log.writer->file()->Close({});
+        // TODO: plumb Env::IOPriority
+        IOOptions close_opts;
+        close_opts.io_activity = GetCurrentThreadIOActivity();
+        auto s = log.writer->file()->Close(close_opts);
         s.PermitUncheckedError();
         wal_write_mutex_.Lock();
         log.writer->PublishIfClosed();
@@ -676,10 +687,12 @@ void DBImpl::PurgeObsoleteFiles(JobContext& state, bool schedule_only) {
   optsfile_num2 = std::min(optsfile_num2, state.min_options_file_number);
 
   // Close WALs before trying to delete them.
+  WriteOptions wal_close_opts;
+  wal_close_opts.io_activity = GetCurrentThreadIOActivity();
   for (const auto w : state.wals_to_free) {
     // TODO: maybe check the return value of Close.
-    // TODO: plumb Env::IOActivity, Env::IOPriority
-    auto s = w->Close({});
+    // TODO: plumb Env::IOPriority
+    auto s = w->Close(wal_close_opts);
     s.PermitUncheckedError();
   }
 
