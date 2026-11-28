@@ -6,6 +6,7 @@
 #ifdef GFLAGS
 #pragma once
 
+#include <atomic>
 #include <cinttypes>
 #include <mutex>
 #include <unordered_map>
@@ -104,33 +105,32 @@ class DbStressListener : public EventListener {
                     const FlushJobInfo& /*flush_job_info*/) override {
     RandomSleep();
     if (db_fault_injection_fs_) {
+      const uint32_t seed = NextFaultInjectionSeed();
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kRead, static_cast<uint32_t>(FLAGS_seed),
-          FLAGS_read_fault_one_in,
+          FaultInjectionIOType::kRead, seed, FLAGS_read_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
           FaultInjectionIOType::kRead);
 
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kWrite, static_cast<uint32_t>(FLAGS_seed),
-          FLAGS_write_fault_one_in,
+          FaultInjectionIOType::kWrite, seed, FLAGS_write_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
           FaultInjectionIOType::kWrite);
 
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kMetadataRead,
-          static_cast<uint32_t>(FLAGS_seed), FLAGS_metadata_read_fault_one_in,
+          FaultInjectionIOType::kMetadataRead, seed,
+          FLAGS_metadata_read_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
           FaultInjectionIOType::kMetadataRead);
 
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kMetadataWrite,
-          static_cast<uint32_t>(FLAGS_seed), FLAGS_metadata_write_fault_one_in,
+          FaultInjectionIOType::kMetadataWrite, seed,
+          FLAGS_metadata_write_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
@@ -300,33 +300,32 @@ class DbStressListener : public EventListener {
 
   void OnSubcompactionBegin(const SubcompactionJobInfo& /* si */) override {
     if (db_fault_injection_fs_) {
+      const uint32_t seed = NextFaultInjectionSeed();
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kRead, static_cast<uint32_t>(FLAGS_seed),
-          FLAGS_read_fault_one_in,
+          FaultInjectionIOType::kRead, seed, FLAGS_read_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
           FaultInjectionIOType::kRead);
 
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kWrite, static_cast<uint32_t>(FLAGS_seed),
-          FLAGS_write_fault_one_in,
+          FaultInjectionIOType::kWrite, seed, FLAGS_write_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
           FaultInjectionIOType::kWrite);
 
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kMetadataRead,
-          static_cast<uint32_t>(FLAGS_seed), FLAGS_metadata_read_fault_one_in,
+          FaultInjectionIOType::kMetadataRead, seed,
+          FLAGS_metadata_read_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
           FaultInjectionIOType::kMetadataRead);
 
       db_fault_injection_fs_->SetThreadLocalErrorContext(
-          FaultInjectionIOType::kMetadataWrite,
-          static_cast<uint32_t>(FLAGS_seed), FLAGS_metadata_write_fault_one_in,
+          FaultInjectionIOType::kMetadataWrite, seed,
+          FLAGS_metadata_write_fault_one_in,
           FLAGS_inject_error_severity == 1 /* retryable */,
           FLAGS_inject_error_severity == 2 /* has_data_loss*/);
       db_fault_injection_fs_->EnableThreadLocalErrorInjection(
@@ -545,6 +544,22 @@ class DbStressListener : public EventListener {
     reported_files_.insert(file_numbers.begin(), file_numbers.end());
   }
 
+  // Returns the seed for the thread-local fault injection of one flush or
+  // subcompaction. OnFlushBegin() and OnSubcompactionBegin() set up a new
+  // fault context with this seed for every job, and that context decides each
+  // I/O of the job in order. With a fixed seed, every job would get an
+  // injected error at the same position in its I/O sequence. A flush that
+  // fails on an injected retryable error is retried by the automatic error
+  // recovery, and the retry does the same reads, so it would fail at the
+  // same read again. The recovery then retries forever and writes stay
+  // stopped. So each job gets a different seed: FLAGS_seed plus a counter.
+  // The seeds still depend only on FLAGS_seed and the order of the jobs.
+  uint32_t NextFaultInjectionSeed() {
+    return static_cast<uint32_t>(FLAGS_seed) +
+           fault_injection_seed_counter_.fetch_add(1,
+                                                   std::memory_order_relaxed);
+  }
+
   // Occasionally holds a completion callback open for longer, so that other
   // compactions have time to make a reported file obsolete and purge it.
   // Otherwise the callbacks rarely last long enough for such a deletion to
@@ -573,6 +588,8 @@ class DbStressListener : public EventListener {
   UniqueIdVerifier unique_ids_;
   SharedState* shared_;
   std::shared_ptr<FaultInjectionTestFS> db_fault_injection_fs_;
+  // Counts the fault injection seeds handed out by NextFaultInjectionSeed().
+  std::atomic<uint32_t> fault_injection_seed_counter_{0};
   mutable std::mutex bg_pressure_mu_;
   BackgroundJobPressure last_bg_pressure_;
   // Files (by file_number) currently in flight from OnCompactionBegin to
