@@ -1,0 +1,1 @@
+Fixed a remote compaction with `OpenAndCompactOptions::allow_resumption = true` failing with a "No such file or directory" error when the worker failed to set up its progress file. The worker now runs the compaction without progress persistence, as its log message says.

@@ -9065,6 +9065,349 @@ TEST_F(CompactionServiceTest, FailedResumeReportsSubcompactionCompleted) {
   }
 }
 
+namespace {
+// The steps of the progress file setup in OpenAndCompact() with
+// allow_resumption = true
+// (DBImplSecondary::FinalizeCompactionProgressWriter()):
+// 1. kCreateTemp: create the temp progress file (name ends with ".dbtmp").
+// 2. kRename: rename the temp file to the final progress file name.
+// 3. kCreateFinal: open a writer on the final progress file.
+enum class ProgressFileSetupStep { kCreateTemp, kRename, kCreateFinal };
+
+// A file system for the remote worker that fails one step of the progress file
+// setup. The failing call returns an IOError before it changes any file, as an
+// injected fault in FaultInjectionTestFS does.
+class FailProgressFileSetupFS : public FileSystemWrapper {
+ public:
+  FailProgressFileSetupFS(const std::shared_ptr<FileSystem>& base,
+                          ProgressFileSetupStep failing_step)
+      : FileSystemWrapper(base), failing_step_(failing_step) {}
+
+  static const char* kClassName() { return "FailProgressFileSetupFS"; }
+  const char* Name() const override { return kClassName(); }
+
+  IOStatus NewWritableFile(const std::string& fname, const FileOptions& opts,
+                           std::unique_ptr<FSWritableFile>* result,
+                           IODebugContext* dbg) override {
+    if (failing_.load() && IsProgressFile(fname)) {
+      const ProgressFileSetupStep step =
+          IsTempFile(fname) ? ProgressFileSetupStep::kCreateTemp
+                            : ProgressFileSetupStep::kCreateFinal;
+      if (step == failing_step_) {
+        return InjectFailure();
+      }
+    }
+    return target()->NewWritableFile(fname, opts, result, dbg);
+  }
+
+  IOStatus RenameFile(const std::string& src, const std::string& dst,
+                      const IOOptions& options, IODebugContext* dbg) override {
+    if (failing_.load() && IsProgressFile(src) &&
+        failing_step_ == ProgressFileSetupStep::kRename) {
+      return InjectFailure();
+    }
+    return target()->RenameFile(src, dst, options, dbg);
+  }
+
+  int injected_failures() const { return injected_failures_.load(); }
+
+  // Turns the failure on or off. It is on after construction.
+  void SetFailing(bool failing) { failing_.store(failing); }
+
+ private:
+  static bool IsProgressFile(const std::string& fname) {
+    return fname.find(kCompactionProgressFileNamePrefix) != std::string::npos;
+  }
+  static bool IsTempFile(const std::string& fname) {
+    const std::string suffix = "." + kTempFileNameSuffix;
+    return fname.size() > suffix.size() &&
+           fname.compare(fname.size() - suffix.size(), suffix.size(), suffix) ==
+               0;
+  }
+
+  IOStatus InjectFailure() {
+    injected_failures_.fetch_add(1);
+    return IOStatus::IOError("injected progress file setup error");
+  }
+
+  const ProgressFileSetupStep failing_step_;
+  std::atomic<bool> failing_{true};
+  std::atomic<int> injected_failures_{0};
+};
+
+// Runs each remote compaction with OpenAndCompact(), allow_resumption = true,
+// on the worker Env `worker_env`. It records the first failed worker status
+// and the progress files left in the jobs' output folders.
+class ProgressFileSetupCompactionService : public MyTestCompactionService {
+ public:
+  ProgressFileSetupCompactionService(std::string db_path, Options& options,
+                                     std::shared_ptr<Statistics>& statistics,
+                                     Env* worker_env)
+      : MyTestCompactionService(
+            std::move(db_path), options, statistics,
+            std::vector<std::shared_ptr<EventListener>>{},
+            std::vector<std::shared_ptr<TablePropertiesCollectorFactory>>{}),
+        worker_env_(worker_env) {}
+
+  CompactionServiceJobStatus Wait(const std::string& scheduled_job_id,
+                                  std::string* result) override {
+    std::string compaction_input;
+    {
+      InstrumentedMutexLock l(&mutex_);
+      auto it = jobs_.find(scheduled_job_id);
+      if (it == jobs_.end()) {
+        return CompactionServiceJobStatus::kFailure;
+      }
+      compaction_input = it->second;
+      jobs_.erase(it);
+    }
+
+    CompactionServiceOptionsOverride options_override = GetOptionsOverride();
+    options_override.env = worker_env_;
+    OpenAndCompactOptions open_options;
+    open_options.allow_resumption = true;
+    Status s = DB::OpenAndCompact(open_options, db_path_, scheduled_job_id,
+                                  compaction_input, result, options_override);
+
+    std::vector<std::string> children;
+    EXPECT_OK(
+        worker_env_->GetChildren(GetOutputPath(scheduled_job_id), &children));
+    int progress_files = 0;
+    for (const auto& child : children) {
+      if (child.find(kCompactionProgressFileNamePrefix) != std::string::npos) {
+        ++progress_files;
+      }
+    }
+    {
+      InstrumentedMutexLock l(&mutex_);
+      if (worker_status_.ok()) {
+        worker_status_ = s;
+      }
+      progress_files_left_ += progress_files;
+    }
+    return s.ok() ? CompactionServiceJobStatus::kSuccess
+                  : CompactionServiceJobStatus::kFailure;
+  }
+
+  Status worker_status() {
+    InstrumentedMutexLock l(&mutex_);
+    return worker_status_;
+  }
+  int progress_files_left() {
+    InstrumentedMutexLock l(&mutex_);
+    return progress_files_left_;
+  }
+
+ private:
+  Env* const worker_env_;
+  Status worker_status_;
+  int progress_files_left_ = 0;
+};
+
+class CompactionServiceProgressFileSetupTest
+    : public CompactionServiceTest,
+      public testing::WithParamInterface<ProgressFileSetupStep> {};
+}  // namespace
+
+// When one step of the progress file setup fails in a fresh job, the worker
+// removes the new progress files and runs the compaction without progress
+// persistence. The cleanup can get an empty path for a file that the attempt
+// never created or already renamed, and the file can be missing (a rename that
+// fails before it moves the temp file leaves no final file). Neither case may
+// fail the compaction.
+TEST_P(CompactionServiceProgressFileSetupTest, CompactsWithoutProgressFile) {
+  std::shared_ptr<FailProgressFileSetupFS> fs =
+      std::make_shared<FailProgressFileSetupFS>(env_->GetFileSystem(),
+                                                GetParam());
+  std::unique_ptr<Env> worker_env(NewCompositeEnv(fs));
+
+  Options options = CurrentOptions();
+  options.disable_auto_compactions = true;
+  options.env = env_;
+  std::shared_ptr<Statistics> statistics = CreateDBStatistics();
+  std::shared_ptr<ProgressFileSetupCompactionService> cs =
+      std::make_shared<ProgressFileSetupCompactionService>(
+          dbname_, options, statistics, worker_env.get());
+  options.compaction_service = cs;
+  DestroyAndReopen(options);
+
+  // Two overlapping flushed files, so the manual compaction has real work.
+  ASSERT_OK(Put(Key(1), "v1"));
+  ASSERT_OK(Put(Key(3), "v3"));
+  ASSERT_OK(Flush());
+  ASSERT_OK(Put(Key(2), "v2"));
+  ASSERT_OK(Put(Key(3), "v3new"));
+  ASSERT_OK(Flush());
+
+  CompactRangeOptions cro;
+  cro.bottommost_level_compaction = BottommostLevelCompaction::kForce;
+  Status s = db_->CompactRange(cro, nullptr, nullptr);
+  EXPECT_OK(s);
+  // Each remote job fails the step once. The manual compaction can run more
+  // than one job.
+  EXPECT_GT(fs->injected_failures(), 0);
+  EXPECT_OK(cs->worker_status());
+  EXPECT_EQ(0, cs->progress_files_left());
+  // The remote result was installed, so no L0 file is left.
+  EXPECT_EQ(0, NumTableFilesAtLevel(0));
+  EXPECT_EQ("v1", Get(Key(1)));
+  EXPECT_EQ("v2", Get(Key(2)));
+  EXPECT_EQ("v3new", Get(Key(3)));
+
+  // Close the DB before worker_env is destroyed, because the compaction
+  // service keeps a raw pointer to it.
+  Close();
+}
+
+INSTANTIATE_TEST_CASE_P(CompactionServiceProgressFileSetupTest,
+                        CompactionServiceProgressFileSetupTest,
+                        ::testing::Values(ProgressFileSetupStep::kCreateTemp,
+                                          ProgressFileSetupStep::kRename,
+                                          ProgressFileSetupStep::kCreateFinal));
+
+namespace {
+// Runs each remote compaction in two attempts with allow_resumption = true. The
+// first attempt stops after it saves progress. The second attempt resumes, and
+// its progress file setup fails at the rename (`fs` turns the failure on only
+// for the second attempt).
+class ResumeProgressFileSetupCompactionService
+    : public MyTestCompactionService {
+ public:
+  ResumeProgressFileSetupCompactionService(
+      std::string db_path, Options& options,
+      std::shared_ptr<Statistics>& statistics, FailProgressFileSetupFS* fs,
+      Env* worker_env)
+      : MyTestCompactionService(
+            std::move(db_path), options, statistics,
+            std::vector<std::shared_ptr<EventListener>>{},
+            std::vector<std::shared_ptr<TablePropertiesCollectorFactory>>{}),
+        fs_(fs),
+        worker_env_(worker_env) {}
+
+  CompactionServiceJobStatus Wait(const std::string& scheduled_job_id,
+                                  std::string* result) override {
+    std::string compaction_input;
+    {
+      InstrumentedMutexLock l(&mutex_);
+      auto it = jobs_.find(scheduled_job_id);
+      if (it == jobs_.end()) {
+        return CompactionServiceJobStatus::kFailure;
+      }
+      compaction_input = it->second;
+      jobs_.erase(it);
+    }
+
+    CompactionServiceOptionsOverride options_override = GetOptionsOverride();
+    options_override.env = worker_env_;
+    std::atomic<bool> canceled{false};
+    OpenAndCompactOptions open_options;
+    open_options.allow_resumption = true;
+    open_options.canceled = &canceled;
+
+    // Put each key in its own output file, and stop at the first saved
+    // progress.
+    SyncPoint::GetInstance()->SetCallBack(
+        "CompactionOutputs::ShouldStopBefore::manual_decision", [](void* p) {
+          *static_cast<std::pair<bool*, const Slice>*>(p)->first = true;
+        });
+    SyncPoint::GetInstance()->SetCallBack(
+        "CompactionJob::PersistSubcompactionProgress:Complete",
+        [&](void*) { canceled.store(true); });
+    SyncPoint::GetInstance()->EnableProcessing();
+    fs_->SetFailing(false);
+    std::string first_result;
+    Status s =
+        DB::OpenAndCompact(open_options, db_path_, scheduled_job_id,
+                           compaction_input, &first_result, options_override);
+    SyncPoint::GetInstance()->DisableProcessing();
+    SyncPoint::GetInstance()->ClearAllCallBacks();
+    EXPECT_TRUE(s.IsManualCompactionPaused()) << s.ToString();
+    const int saved_progress_files =
+        CountProgressFiles(GetOutputPath(scheduled_job_id));
+
+    canceled.store(false);
+    fs_->SetFailing(true);
+    s = DB::OpenAndCompact(open_options, db_path_, scheduled_job_id,
+                           compaction_input, result, options_override);
+    fs_->SetFailing(false);
+    {
+      InstrumentedMutexLock l(&mutex_);
+      saved_progress_files_ = saved_progress_files;
+      resume_status_ = s;
+    }
+    return s.ok() ? CompactionServiceJobStatus::kSuccess
+                  : CompactionServiceJobStatus::kFailure;
+  }
+
+  int saved_progress_files() {
+    InstrumentedMutexLock l(&mutex_);
+    return saved_progress_files_;
+  }
+  Status resume_status() {
+    InstrumentedMutexLock l(&mutex_);
+    return resume_status_;
+  }
+
+ private:
+  int CountProgressFiles(const std::string& output_dir) {
+    std::vector<std::string> children;
+    EXPECT_OK(worker_env_->GetChildren(output_dir, &children));
+    int count = 0;
+    for (const auto& child : children) {
+      if (child.find(kCompactionProgressFileNamePrefix) != std::string::npos) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  FailProgressFileSetupFS* const fs_;
+  Env* const worker_env_;
+  int saved_progress_files_ = 0;
+  Status resume_status_;
+};
+}  // namespace
+
+// When the progress file setup of a resumed job fails, the job runs on from its
+// loaded progress without progress persistence, as a fresh job does.
+TEST_F(CompactionServiceTest, ResumedJobRunsWithoutProgressFile) {
+  std::shared_ptr<FailProgressFileSetupFS> fs =
+      std::make_shared<FailProgressFileSetupFS>(env_->GetFileSystem(),
+                                                ProgressFileSetupStep::kRename);
+  std::unique_ptr<Env> worker_env(NewCompositeEnv(fs));
+
+  Options options = CurrentOptions();
+  options.disable_auto_compactions = true;
+  options.env = env_;
+  std::shared_ptr<Statistics> statistics = CreateDBStatistics();
+  std::shared_ptr<ResumeProgressFileSetupCompactionService> cs =
+      std::make_shared<ResumeProgressFileSetupCompactionService>(
+          dbname_, options, statistics, fs.get(), worker_env.get());
+  options.compaction_service = cs;
+  DestroyAndReopen(options);
+
+  for (int i = 0; i < 2; ++i) {
+    for (int key = 0; key < 4; ++key) {
+      ASSERT_OK(Put(Key(key), "value" + std::to_string(i)));
+    }
+    ASSERT_OK(Flush());
+  }
+
+  EXPECT_OK(db_->CompactRange(CompactRangeOptions(), nullptr, nullptr));
+  EXPECT_EQ(1, cs->saved_progress_files());
+  EXPECT_EQ(1, fs->injected_failures());
+  EXPECT_OK(cs->resume_status());
+  // The remote result was installed, so no L0 file is left.
+  EXPECT_EQ(0, NumTableFilesAtLevel(0));
+  for (int key = 0; key < 4; ++key) {
+    EXPECT_EQ("value1", Get(Key(key)));
+  }
+
+  // Close the DB before worker_env is destroyed, because the compaction
+  // service keeps a raw pointer to it.
+  Close();
+}
+
 TEST_F(CompactionServiceTest, TablePropertiesCollector) {
   const static std::string kUserPropertyName = "TestCount";
 
